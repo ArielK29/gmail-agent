@@ -107,6 +107,8 @@ async function findNewIds(accessToken: string, historyId: string | null): Promis
   }
   const profile = await gmail('/profile', accessToken);
   const list = await gmail(`/messages?q=${encodeURIComponent('in:inbox newer_than:2d')}&maxResults=${MAX_EMAILS_PER_RUN}`, accessToken);
+  // Gmail's own reason (for example the API not enabled yet) instead of silently "no new emails".
+  if (list.status !== 200) throw new Error('Gmail: ' + (list.body?.error?.message ?? list.status));
   return {
     ids: (list.body.messages ?? []).map((item: any) => item.id),
     historyId: profile.body.historyId ?? null,
@@ -139,7 +141,11 @@ async function classify(emails: EmailInfo[]): Promise<Map<string, { category: st
       ],
     }),
   });
-  if (!response.ok) throw new Error('model request failed');
+  if (!response.ok) {
+    // Pass on the model service's own reason (for example a missing credit balance) so the page can show it.
+    const detail = await response.json().catch(() => null);
+    throw new Error('Anthropic: ' + (detail?.error?.message ?? response.status));
+  }
   const text: string = (await response.json()).content?.[0]?.text ?? '';
   const start = text.indexOf('[');
   const end = text.lastIndexOf(']');

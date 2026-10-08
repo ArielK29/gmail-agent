@@ -140,7 +140,11 @@
     $('check').disabled = true; $('status').textContent = 'בודק מיילים חדשים...';
     try {
       const result = await callFunction('gmail-sync');
-      $('status').textContent = result.saved > 0 ? `נוספו ${result.saved} מיילים.` : 'אין מיילים חדשים.';
+      if (result.problems && result.problems.length > 0) {
+        $('status').textContent = 'הבדיקה נכשלה: ' + result.problems.join(' | ');
+      } else {
+        $('status').textContent = result.saved > 0 ? `נוספו ${result.saved} מיילים.` : 'אין מיילים חדשים.';
+      }
       await refresh();
     } catch (e) { $('status').textContent = 'הבדיקה נכשלה: ' + e.message; }
     $('check').disabled = false;
