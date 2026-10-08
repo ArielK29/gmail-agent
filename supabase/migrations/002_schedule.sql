@@ -13,7 +13,8 @@ select cron.schedule(
       'Content-Type', 'application/json',
       'Authorization', 'Bearer ' || (select value from public.agent_secrets where name = 'cron')
     ),
-    body := '{}'::jsonb
+    body := '{}'::jsonb,
+    timeout_milliseconds := 60000 -- the agent needs more than the 5 s default
   );
   $$
 );
