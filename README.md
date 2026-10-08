@@ -22,7 +22,7 @@ supabase/functions/gmail-connect          מתחיל את החיבור (מחזי
 supabase/functions/gmail-callback         Google חוזר לכאן, שומר את ה-token
 supabase/functions/gmail-sync             הסוכן: מוצא מיילים חדשים, מסווג ומסכם
 supabase/functions/gmail-disconnect       ניתוק
-public/index.html                         הדף (התחברות, חיבור, "בדוק עכשיו", רשימה)
+docs/index.html                         הדף (התחברות, חיבור, "בדוק עכשיו", רשימה)
 ```
 
 ## מה אתה צריך לעשות (אני לא מקליד סודות ולא פותח חשבונות)
