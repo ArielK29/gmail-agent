@@ -75,7 +75,12 @@
 
   async function callFunction(name) {
     const { data, error } = await db.functions.invoke(name, { body: {} });
-    if (error) throw error;
+    if (error) {
+      // Show the real reason the server gave (for example a missing secret), not a generic message.
+      let detail = '';
+      try { detail = (await error.context.json()).error || ''; } catch { detail = ''; }
+      throw new Error(detail || error.message || 'unknown');
+    }
     return data;
   }
 
@@ -129,7 +134,7 @@
   $('connect').onclick = async () => {
     $('status').textContent = 'פותח את Google...';
     try { const { url } = await callFunction('gmail-connect'); window.location.href = url; }
-    catch { $('status').textContent = 'משהו השתבש. נסה שוב.'; }
+    catch (e) { $('status').textContent = 'משהו השתבש: ' + e.message; }
   };
   $('check').onclick = async () => {
     $('check').disabled = true; $('status').textContent = 'בודק מיילים חדשים...';
@@ -137,13 +142,13 @@
       const result = await callFunction('gmail-sync');
       $('status').textContent = result.saved > 0 ? `נוספו ${result.saved} מיילים.` : 'אין מיילים חדשים.';
       await refresh();
-    } catch { $('status').textContent = 'הבדיקה נכשלה. נסה שוב בעוד רגע.'; }
+    } catch (e) { $('status').textContent = 'הבדיקה נכשלה: ' + e.message; }
     $('check').disabled = false;
   };
   $('disconnect').onclick = async () => {
     if (!confirm('לנתק את Gmail ולמחוק את הסיכומים השמורים?')) return;
     try { await callFunction('gmail-disconnect'); $('status').textContent = 'Gmail נותק.'; await refresh(); }
-    catch { $('status').textContent = 'הניתוק נכשל. נסה שוב.'; }
+    catch (e) { $('status').textContent = 'הניתוק נכשל: ' + e.message; }
   };
 
   const result = new URLSearchParams(location.search).get('gmail');
