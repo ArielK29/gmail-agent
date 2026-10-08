@@ -1,4 +1,4 @@
-// The agent. Looks for NEW emails in Gmail (read-only), asks Claude for a category and a one-sentence summary
+// The agent. Looks for NEW emails in Gmail (read-only), asks Gemini for a category and a one-sentence summary
 // of each, and saves only those (never the email body).
 //
 // Two ways to call it:
@@ -18,7 +18,8 @@ const cors = {
 const reply = (status: number, body: Record<string, unknown>) =>
   new Response(JSON.stringify(body), { status, headers: { ...cors, 'Content-Type': 'application/json' } });
 
-const MODEL = 'claude-haiku-4-5-20251001';
+// Gemini (free tier). The optional GEMINI_MODEL secret switches the model without a code change.
+const MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.5-flash-lite';
 const CATEGORIES = ['important', 'personal', 'work', 'finance', 'newsletter', 'promotion', 'notification', 'other'];
 const MAX_EMAILS_PER_RUN = 20;
 const MAX_BODY_CHARS = 1500;
@@ -122,31 +123,31 @@ Reply with ONLY a JSON array, one object per email, in the same order: {"id": "<
 async function classify(emails: EmailInfo[]): Promise<Map<string, { category: string; summary: string }>> {
   const result = new Map<string, { category: string; summary: string }>();
   if (emails.length === 0) return result;
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
+  const apiKey = Deno.env.get('GEMINI_API_KEY');
+  if (!apiKey) throw new Error('GEMINI_API_KEY is not set');
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
     method: 'POST',
-    headers: {
-      'x-api-key': Deno.env.get('ANTHROPIC_API_KEY')!,
-      'anthropic-version': '2023-06-01',
-      'content-type': 'application/json',
-    },
+    headers: { 'x-goog-api-key': apiKey, 'content-type': 'application/json' },
     body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 3000,
-      system: SYSTEM_PROMPT,
-      messages: [
+      systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
+      contents: [
         {
           role: 'user',
-          content: JSON.stringify(emails.map((email) => ({ id: email.id, from: email.from, subject: email.subject, text: email.text }))),
+          parts: [
+            { text: JSON.stringify(emails.map((email) => ({ id: email.id, from: email.from, subject: email.subject, text: email.text }))) },
+          ],
         },
       ],
+      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 4000, temperature: 0.2 },
     }),
   });
   if (!response.ok) {
-    // Pass on the model service's own reason (for example a missing credit balance) so the page can show it.
+    // Pass on the model service's own reason (for example a quota limit) so the page can show it.
     const detail = await response.json().catch(() => null);
-    throw new Error('Anthropic: ' + (detail?.error?.message ?? response.status));
+    throw new Error('Gemini: ' + (detail?.error?.message ?? response.status));
   }
-  const text: string = (await response.json()).content?.[0]?.text ?? '';
+  const answer = await response.json();
+  const text: string = (answer.candidates?.[0]?.content?.parts ?? []).map((part: { text?: string }) => part.text ?? '').join('');
   const start = text.indexOf('[');
   const end = text.lastIndexOf(']');
   if (start < 0 || end < start) throw new Error('model answer was not JSON');

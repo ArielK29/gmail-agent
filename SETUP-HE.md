@@ -27,15 +27,15 @@
 3. **Authorized redirect URIs** ← הדבק בדיוק: `https://ppkbuyiatkxpfeqmvwzb.supabase.co/functions/v1/gmail-callback`
 4. **Create**. שמור את **Client ID** ואת **Client secret**.
 
-## שלב 4 · מפתח Anthropic
-1. https://console.anthropic.com ← **API keys** ← צור מפתח (שם: `gmail-agent`). שים לב שיש גבול הוצאה בחשבון.
+## שלב 4 · מפתח Gemini (חינמי)
+1. https://aistudio.google.com/apikey ← **Create API key** ← בחר את הפרויקט `gmail-agent` ← העתק את המפתח.
 
 ## שלב 5 · סודות ב-Supabase (אתה מדביק)
 Supabase ← הפרויקט `ArielK29's Project` ← **Edge Functions** ← **Secrets** ← הוסף:
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
-- `ANTHROPIC_API_KEY`
-- `APP_URL` = `http://localhost:5174`
+- `GEMINI_API_KEY`
+- `APP_URL` = `https://arielk29.github.io/gmail-agent/`
 
 ## שלב 6 · משתמש בפרויקט
 הדף מתחבר עם אימייל וסיסמה בפרויקט הזה. אני לא יוצר חשבונות, לכן כשהדף יעלה תלחץ שם "יצירת חשבון".
@@ -45,4 +45,4 @@ Supabase ← הפרויקט `ArielK29's Project` ← **Edge Functions** ← **Se
 
 ## אם משהו נתקע
 - `redirect_uri_mismatch`: הכתובת בשלב 3 לא זהה לחלוטין לכתובת בטבלה.
-- אחרי החיבור אין סיכומים: בדוק שהגדרת `ANTHROPIC_API_KEY` ושיש מיילים בתיבה מהיומיים האחרונים.
+- אחרי החיבור אין סיכומים: בדוק שהגדרת `GEMINI_API_KEY` ושיש מיילים בתיבה מהיומיים האחרונים.

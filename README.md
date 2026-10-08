@@ -9,7 +9,7 @@
 | איפה נשמר ה-token | טבלה בשרת (`gmail_connections`). הדפדפן לא יכול לקרוא אותו, רק פונקציות השרת |
 | זיהוי מיילים חדשים | `history.list` של Gmail מאז המיקום ששמרנו. בדיקה תקופתית (כל 10 דקות, pg_cron) + כפתור "בדוק עכשיו" |
 | מה נשמר | שולח, נושא, קטגוריה, סיכום (לא גוף המייל) |
-| מודל | Claude Haiku, בלי כלים ובלי יכולת לפעול. המיילים מוגדרים כמידע לא אמין (הגנה מ-prompt injection) |
+| מודל | Gemini (חינמי, `gemini-3.5-flash-lite`), בלי כלים ובלי יכולת לפעול. המיילים מוגדרים כמידע לא אמין (הגנה מ-prompt injection) |
 | משתמשים ואימות Google | רק אתה. האפליקציה מפורסמת ב-Google במצב "Production" **בלי אימות** (Unverified): אין ניתוק שבועי של ה-token, מסך אזהרה אחד בהתחברות הראשונה, תקרה של 100 משתמשים. אימות מלא (דומיין, דף פרטיות, בדיקת אבטחה בתשלום) רק אם יהיה שימוש ציבורי |
 | פעולה על מייל חשוב | רק מציג בדף |
 | ניתוק | `gmail-disconnect` מבטל את ההרשאה אצל Google ומוחק את החיבור והסיכומים |
@@ -29,8 +29,8 @@ docs/index.html                         הדף (התחברות, חיבור, "ב�
 1. **Google Cloud** (https://console.cloud.google.com): צור פרויקט חדש → APIs & Services → Library → הפעל **Gmail API**.
 2. **מסך הסכמה (זה "המיתוג")**: APIs & Services → OAuth consent screen → External → שם האפליקציה (למשל "סוכן Gmail"), מייל תמיכה, → Scopes: הוסף `.../auth/gmail.readonly` → לחץ **Publish app** (עובר ל-Production). Google תציג שהאפליקציה לא מאומתת, וזה צפוי. בהתחברות הראשונה: "מתקדם" ← "המשך אל סוכן Gmail".
 3. **אישורים**: Credentials → Create credentials → OAuth client ID → Web application → Authorized redirect URI: `https://<PROJECT_REF>.supabase.co/functions/v1/gmail-callback` (אני אתן לך את הכתובת המדויקת). קבל **Client ID** ו-**Client secret**.
-4. **Anthropic**: מפתח API מ-https://console.anthropic.com.
-5. **ב-Supabase** → Edge Functions → Secrets: הדבק בעצמך `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `ANTHROPIC_API_KEY`, ו-`APP_URL` (כתובת הדף).
+4. **Gemini**: מפתח API חינמי מ-https://aistudio.google.com/apikey.
+5. **ב-Supabase** → Edge Functions → Secrets: הדבק בעצמך `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GEMINI_API_KEY`, ו-`APP_URL` (כתובת הדף).
 
 ## הערות
 - אם מישהו אחר ינסה להתחבר הוא יראה את אזהרת "לא מאומת". לשימוש ציבורי צריך אימות מלא של Google.
