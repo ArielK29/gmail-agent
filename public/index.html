@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>סוכן Gmail</title>
+  <style>
+    :root { --bg:#0d0d0d; --surface:#1a1a1a; --line:#2a2a2a; --text:#f5f5f5; --muted:#a0a0a0; --accent:#00e5ff; --pink:#ff00a8; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui, "Segoe UI", Arial, sans-serif; }
+    main { max-width: 640px; margin: 0 auto; padding: 24px 16px 64px; }
+    h1 { font-size: 28px; margin: 0 0 4px; }
+    p.sub { color: var(--muted); margin: 0 0 24px; }
+    .card { background: var(--surface); border:1px solid var(--line); border-radius: 16px; padding: 16px; margin-bottom: 16px; }
+    label { display:block; color: var(--muted); font-size: 14px; margin: 8px 0 4px; }
+    input { width:100%; min-height:48px; border-radius:12px; border:1px solid var(--line); background:var(--bg); color:var(--text); padding:0 12px; font-size:16px; }
+    button { min-height:48px; border:0; border-radius:999px; padding:0 20px; font-size:16px; cursor:pointer; background:var(--pink); color:#000; font-weight:600; margin-top:12px; }
+    button.secondary { background:var(--line); color:var(--text); }
+    button:disabled { opacity:.5; cursor:default; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; }
+    .status { color: var(--muted); font-size: 14px; margin-top: 8px; min-height: 20px; }
+    .item { border-top:1px solid var(--line); padding: 12px 0; }
+    .item:first-child { border-top:0; }
+    .tag { display:inline-block; font-size:12px; border-radius:999px; padding:2px 10px; background:var(--line); color:var(--accent); margin-inline-start:8px; }
+    .from { font-weight:600; }
+    .subject { color: var(--muted); font-size: 14px; }
+    .summary { margin-top: 6px; }
+    .hidden { display:none; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>סוכן Gmail</h1>
+  <p class="sub">קורא את המיילים החדשים שלך (קריאה בלבד), מסווג ומסכם. תוכן המייל לא נשמר.</p>
+
+  <section id="login" class="card">
+    <label for="email">אימייל</label>
+    <input id="email" type="email" autocomplete="username" />
+    <label for="password">סיסמה</label>
+    <input id="password" type="password" autocomplete="current-password" />
+    <div class="row">
+      <button id="signIn">התחברות</button>
+      <button id="signUp" class="secondary">יצירת חשבון</button>
+    </div>
+    <div id="loginStatus" class="status"></div>
+  </section>
+
+  <section id="app" class="card hidden">
+    <div id="connection" class="status"></div>
+    <div class="row">
+      <button id="connect">חבר את Gmail</button>
+      <button id="check" class="secondary hidden">בדוק מיילים חדשים עכשיו</button>
+      <button id="disconnect" class="secondary hidden">נתק את Gmail</button>
+      <button id="signOut" class="secondary">התנתקות</button>
+    </div>
+    <div id="status" class="status"></div>
+  </section>
+
+  <section id="digestCard" class="card hidden">
+    <strong>מיילים אחרונים</strong>
+    <div id="digest"></div>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script>
+  // config.js defines window.APP_CONFIG = { supabaseUrl, supabaseKey } (the publishable key; never a secret key).
+  const { supabaseUrl, supabaseKey } = window.APP_CONFIG;
+  const db = supabase.createClient(supabaseUrl, supabaseKey);
+  const $ = (id) => document.getElementById(id);
+  const CATEGORY_HE = { important:'חשוב', personal:'אישי', work:'עבודה', finance:'כספים', newsletter:'ניוזלטר', promotion:'פרסומת', notification:'התראה', other:'אחר' };
+
+  function show(el, on) { el.classList.toggle('hidden', !on); }
+
+  async function callFunction(name) {
+    const { data, error } = await db.functions.invoke(name, { body: {} });
+    if (error) throw error;
+    return data;
+  }
+
+  // All text from emails is put on the page with textContent (never as HTML).
+  function renderDigest(rows) {
+    const box = $('digest');
+    box.textContent = '';
+    if (rows.length === 0) { box.textContent = 'עוד אין מיילים. לחץ "בדוק מיילים חדשים עכשיו".'; return; }
+    for (const row of rows) {
+      const item = document.createElement('div'); item.className = 'item';
+      const from = document.createElement('span'); from.className = 'from'; from.textContent = row.from_name || 'לא ידוע';
+      const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = CATEGORY_HE[row.category] || row.category;
+      const subject = document.createElement('div'); subject.className = 'subject'; subject.textContent = row.subject || '(ללא נושא)';
+      const summary = document.createElement('div'); summary.className = 'summary'; summary.textContent = row.summary;
+      item.append(from, tag, subject, summary);
+      box.append(item);
+    }
+  }
+
+  async function refresh() {
+    const { data: session } = await db.auth.getSession();
+    const signedIn = Boolean(session.session);
+    show($('login'), !signedIn); show($('app'), signedIn); show($('digestCard'), signedIn);
+    if (!signedIn) return;
+
+    const { data: connection } = await db.from('gmail_connections').select('google_email, last_checked_at').maybeSingle();
+    const connected = Boolean(connection);
+    $('connection').textContent = connected
+      ? `מחובר: ${connection.google_email || 'Gmail'}${connection.last_checked_at ? ' · נבדק לאחרונה ' + new Date(connection.last_checked_at).toLocaleString('he-IL') : ''}`
+      : 'Gmail עדיין לא מחובר.';
+    show($('connect'), !connected); show($('check'), connected); show($('disconnect'), connected);
+
+    const { data: rows } = await db.from('gmail_digest').select('from_name, subject, category, summary, received_at')
+      .order('received_at', { ascending: false }).limit(50);
+    renderDigest(rows || []);
+  }
+
+  async function authAction(kind) {
+    $('loginStatus').textContent = '';
+    const credentials = { email: $('email').value.trim(), password: $('password').value };
+    const { error } = kind === 'in' ? await db.auth.signInWithPassword(credentials) : await db.auth.signUp(credentials);
+    if (error) { $('loginStatus').textContent = 'לא הצלחנו: ' + error.message; return; }
+    if (kind === 'up') $('loginStatus').textContent = 'נשלח מייל אישור (אם נדרש). אחרי האישור התחבר.';
+    refresh();
+  }
+
+  $('signIn').onclick = () => authAction('in');
+  $('signUp').onclick = () => authAction('up');
+  $('signOut').onclick = async () => { await db.auth.signOut(); refresh(); };
+
+  $('connect').onclick = async () => {
+    $('status').textContent = 'פותח את Google...';
+    try { const { url } = await callFunction('gmail-connect'); window.location.href = url; }
+    catch { $('status').textContent = 'משהו השתבש. נסה שוב.'; }
+  };
+  $('check').onclick = async () => {
+    $('check').disabled = true; $('status').textContent = 'בודק מיילים חדשים...';
+    try {
+      const result = await callFunction('gmail-sync');
+      $('status').textContent = result.saved > 0 ? `נוספו ${result.saved} מיילים.` : 'אין מיילים חדשים.';
+      await refresh();
+    } catch { $('status').textContent = 'הבדיקה נכשלה. נסה שוב בעוד רגע.'; }
+    $('check').disabled = false;
+  };
+  $('disconnect').onclick = async () => {
+    if (!confirm('לנתק את Gmail ולמחוק את הסיכומים השמורים?')) return;
+    try { await callFunction('gmail-disconnect'); $('status').textContent = 'Gmail נותק.'; await refresh(); }
+    catch { $('status').textContent = 'הניתוק נכשל. נסה שוב.'; }
+  };
+
+  const result = new URLSearchParams(location.search).get('gmail');
+  if (result) {
+    history.replaceState(null, '', location.pathname);
+    const texts = { connected: 'Gmail חובר בהצלחה.', cancelled: 'החיבור בוטל.', expired: 'הקישור פג תוקף. נסה שוב.', error: 'החיבור נכשל. נסה שוב.' };
+    setTimeout(() => { $('status').textContent = texts[result] || ''; }, 300);
+  }
+  db.auth.onAuthStateChange(() => refresh());
+  refresh();
+</script>
+</body>
+</html>

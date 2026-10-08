@@ -1,0 +1,3 @@
+public/config.js
+.env*
+node_modules
