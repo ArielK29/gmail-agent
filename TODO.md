@@ -9,7 +9,8 @@
 - בכל שיחה ב-14-15.10 לבדוק ולהזכיר לאריאל.
 
 ## נדחה בכוונה: חובה לחזור לזה (אריאל סגר את השלב ב-10.10.2026)
-- [ ] **Supabase:** Site URL + Redirect URL + הפעלת הספק Google (אריאל מדביק את ה-Secret). דורש התחברות ל-Supabase. עד אז כפתור "התחבר עם Google" מציג הודעה בעברית.
+- [x] **Supabase (10.10.2026):** Site URL ו-Redirect URL נשמרו ואומתו אחרי טעינה מחדש (התחברות ל-Supabase דרך GitHub).
+- [ ] **Supabase, הספק Google:** נשאר רק ה-Client Secret. Google כבר לא מאפשרת לראות או להעתיק Secret קיים (רק "Add secret" שיוצר חדש, ומציג אותו פעם אחת). לכן: Google Cloud ← Clients ← Web client 1 ← (i) ← "Add secret" ← להעתיק ← Supabase ← Authentication ← Sign In / Providers ← Google ← להפעיל, להדביק ב-Client Secret, Client IDs = `936319620392-24je6ff5f91493ujq7riic77n9orv6qm.apps.googleusercontent.com` ← Save. ה-Secret הישן ממשיך לעבוד לפונקציות הסוכן (Add secret רק מוסיף). אריאל מדביק בעצמו. אחר כך לבדוק: `/auth/v1/settings` מחזיר `google: true`.
 - [ ] **Audience:** כתובות ה-Gmail של הלקוחות (עד 100 במצב Testing). חסר: הכתובות.
 - [ ] **לוגו ב-Google Cloud:** נדחה, כי עם לוגו Google תדרוש אימות גם במצב Testing.
 - [ ] **"Email productivity" + נוסח ההסבר ל-Google:** יופיעו בהגשת האימות (Verification Center).
