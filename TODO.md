@@ -2,6 +2,16 @@
 
 עודכן: 10.10.2026. סימון: [x] נעשה ובדוק, [ ] ממתין.
 
+## נדחה בכוונה: חובה לחזור לזה (אריאל סגר את השלב ב-10.10.2026)
+- [ ] **Supabase:** Site URL + Redirect URL + הפעלת הספק Google (אריאל מדביק את ה-Secret). דורש התחברות ל-Supabase. עד אז כפתור "התחבר עם Google" מציג הודעה בעברית.
+- [ ] **Audience:** כתובות ה-Gmail של הלקוחות (עד 100 במצב Testing). חסר: הכתובות.
+- [ ] **לוגו ב-Google Cloud:** נדחה, כי עם לוגו Google תדרוש אימות גם במצב Testing.
+- [ ] **"Email productivity" + נוסח ההסבר ל-Google:** יופיעו בהגשת האימות (Verification Center).
+- [ ] **דומיין:** לקנות, לאמת ב-Search Console (תמונות 28-31), להעביר אליו את הדפים, ואז "I have fixed the issues" ← Proceed.
+- [ ] **שלבים 3-4 של הקורס:** ממתינים לשיעורים מאריאל.
+- [ ] **לפני לקוחות אמיתיים:** מסלול Gemini בתשלום, מחיקת `ANTHROPIC_API_KEY`, סקירה משפטית.
+- [ ] **בדיקות שלא נעשו:** לחיצה בפועל על כפתור Google ועל "בדוק עכשיו" בדפדפן (בדקתי רק את תשובות השרת).
+
 ## א. להפעיל את "התחבר עם Google" (דורש התחברות של אריאל ל-Supabase ול-Google)
 - [ ] Supabase → Authentication → URL Configuration: Site URL = `https://arielk29.github.io/gmail-agent/`, ובנוסף אותה כתובת ב-Redirect URLs (מתקן גם את קישור האישור שמפנה ל-localhost).
 - [x] Google Cloud → Clients → ה-OAuth client: נוספה כתובת חזרה `https://ppkbuyiatkxpfeqmvwzb.supabase.co/auth/v1/callback` (נשמר ואומת אחרי טעינה מחדש, 10.10.2026).
