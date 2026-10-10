@@ -26,6 +26,9 @@
     .subject { color: var(--muted); font-size: 14px; }
     .summary { margin-top: 6px; }
     .hidden { display:none; }
+    .divider { display:flex; align-items:center; gap:12px; color:var(--muted); font-size:14px; margin:16px 0 4px; }
+    .divider::before, .divider::after { content:""; flex:1; height:1px; background:var(--line); }
+    button.google { width:100%; display:flex; align-items:center; justify-content:center; gap:10px; background:#fff; color:#1f1f1f; }
   </style>
 </head>
 <body>
@@ -42,6 +45,11 @@
       <button id="signIn">התחברות</button>
       <button id="signUp" class="secondary">יצירת חשבון</button>
     </div>
+    <div class="divider"><span>או</span></div>
+    <button id="google" class="google" type="button">
+      <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.1C12.4 13.6 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.5 5.8c4.4-4.1 7.1-10.1 7.1-17.5z"/><path fill="#FBBC05" d="M10.5 28.7c-.5-1.5-.8-3-.8-4.7s.3-3.2.8-4.7l-7.9-6.1C.9 16.4 0 20.1 0 24s.9 7.6 2.6 10.8l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.5-5.8c-2.1 1.4-4.9 2.3-8.4 2.3-6.3 0-11.6-4.1-13.5-9.8l-7.9 6.1C6.5 42.6 14.6 48 24 48z"/></svg>
+      התחבר עם Google
+    </button>
     <div id="loginStatus" class="status"></div>
   </section>
 
@@ -62,7 +70,7 @@
   </section>
 
   <p style="text-align:center;font-size:14px;opacity:.7;margin-top:24px">
-    <a href="about.html">אודות</a> · <a href="privacy.html">מדיניות פרטיות</a>
+    <a href="about.html">אודות</a> · <a href="privacy.html">מדיניות פרטיות</a> · <a href="terms.html">תנאי שימוש</a>
   </p>
 </main>
 
@@ -133,6 +141,15 @@
 
   $('signIn').onclick = () => authAction('in');
   $('signUp').onclick = () => authAction('up');
+  // Sign in with Google (identity only: email + profile). Reading Gmail is a separate, explicit step ("connect Gmail").
+  $('google').onclick = async () => {
+    $('loginStatus').textContent = 'פותח את Google...';
+    const { error } = await db.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: location.origin + location.pathname },
+    });
+    if (error) $('loginStatus').textContent = 'לא הצלחנו: ' + error.message;
+  };
   $('signOut').onclick = async () => { await db.auth.signOut(); refresh(); };
 
   $('connect').onclick = async () => {
