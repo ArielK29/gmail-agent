@@ -144,6 +144,14 @@
   // Sign in with Google (identity only: email + profile). Reading Gmail is a separate, explicit step ("connect Gmail").
   $('google').onclick = async () => {
     $('loginStatus').textContent = 'פותח את Google...';
+    // Ask the server first, so a provider that is not switched on yet gives a readable message instead of raw JSON.
+    try {
+      const settings = await fetch(`${supabaseUrl}/auth/v1/settings`, { headers: { apikey: supabaseKey } }).then((r) => r.json());
+      if (!settings.external || !settings.external.google) {
+        $('loginStatus').textContent = 'ההתחברות עם Google עוד לא הופעלה. אפשר להתחבר עם אימייל וסיסמה.';
+        return;
+      }
+    } catch { /* if the check itself fails, try the normal flow */ }
     const { error } = await db.auth.signInWithOAuth({
       provider: 'google',
       options: { redirectTo: location.origin + location.pathname },
