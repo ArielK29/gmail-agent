@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>סוכן Gmail · סיכום חכם של המיילים שלך</title>
+  <meta name="description" content="סוכן Gmail קורא את המיילים החדשים שלך (קריאה בלבד), מסווג ומסכם אותם בעברית. תוכן המייל לא נשמר." />
+  <style>
+    :root { --bg:#0d0d0d; --surface:#1a1a1a; --line:#2a2a2a; --text:#f5f5f5; --muted:#a0a0a0; --accent:#00e5ff; --pink:#ff00a8; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui, "Segoe UI", Arial, sans-serif; line-height:1.7; }
+    main { max-width: 720px; margin: 0 auto; padding: 40px 16px 80px; }
+    .logo { width: 64px; height: 64px; border-radius: 18px; background: linear-gradient(135deg, var(--pink), var(--accent)); display:flex; align-items:center; justify-content:center; font-size: 34px; margin-bottom: 16px; }
+    h1 { font-size: 36px; margin: 0 0 8px; line-height: 1.2; }
+    .lead { color:#d6d6d6; font-size: 18px; margin: 0 0 24px; }
+    .cta { display:inline-block; min-height:48px; line-height:48px; padding:0 24px; border-radius:999px; background:var(--pink); color:#000; font-weight:700; text-decoration:none; }
+    .grid { display:grid; gap:12px; margin: 32px 0; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); }
+    .card { background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:16px; }
+    .card h3 { margin:0 0 6px; font-size:17px; }
+    .card p { margin:0; color:#cfcfcf; font-size:15px; }
+    footer { margin-top: 40px; color: var(--muted); font-size: 14px; }
+    a { color: var(--accent); }
+  </style>
+</head>
+<body>
+<main>
+  <div class="logo" aria-hidden="true">✉️</div>
+  <h1>סוכן Gmail</h1>
+  <p class="lead">מקבלים את המיילים החדשים שלכם כבר מסווגים ומסוכמים במשפט אחד בעברית. כך רואים מה חשוב בלי לפתוח כל הודעה.</p>
+  <p><a class="cta" href="./">התחברות והתחלה</a></p>
+
+  <div class="grid">
+    <div class="card"><h3>קריאה בלבד</h3><p>השירות לא שולח, לא מוחק ולא משנה דבר בתיבת ה-Gmail שלכם.</p></div>
+    <div class="card"><h3>תוכן המייל לא נשמר</h3><p>נשמרים רק שולח, נושא, קטגוריה וסיכום קצר. גוף ההודעה לא נשמר.</p></div>
+    <div class="card"><h3>הנתונים שלכם בלבד</h3><p>כל לקוח רואה רק את הסיכומים שלו. אפשר לנתק ולמחוק הכול בלחיצה.</p></div>
+  </div>
+
+  <h2>איך זה עובד</h2>
+  <ol>
+    <li>פותחים חשבון ומתחברים.</li>
+    <li>לוחצים "חבר את Gmail" ומאשרים גישת קריאה במסך של Google.</li>
+    <li>השירות בודק מיילים חדשים כל כמה דקות ומציג סיכומים עם קטגוריה.</li>
+  </ol>
+
+  <footer>
+    <a href="./privacy.html">מדיניות פרטיות</a> · יצירת קשר: <a href="mailto:arielkorman7@gmail.com">arielkorman7@gmail.com</a>
+  </footer>
+</main>
+</body>
+</html>
