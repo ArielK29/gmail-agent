@@ -4,13 +4,14 @@
 
 ## א. להפעיל את "התחבר עם Google" (דורש התחברות של אריאל ל-Supabase ול-Google)
 - [ ] Supabase → Authentication → URL Configuration: Site URL = `https://arielk29.github.io/gmail-agent/`, ובנוסף אותה כתובת ב-Redirect URLs (מתקן גם את קישור האישור שמפנה ל-localhost).
-- [ ] Google Cloud → Clients → ה-OAuth client: להוסיף כתובת חזרה `https://ppkbuyiatkxpfeqmvwzb.supabase.co/auth/v1/callback`.
+- [x] Google Cloud → Clients → ה-OAuth client: נוספה כתובת חזרה `https://ppkbuyiatkxpfeqmvwzb.supabase.co/auth/v1/callback` (נשמר ואומת אחרי טעינה מחדש, 10.10.2026).
 - [ ] Supabase → Authentication → Sign In / Providers → Google: להפעיל ולהדביק Client ID ו-Secret (אריאל מדביק בעצמו).
 - [ ] לבדוק בפועל: ללחוץ על הכפתור ולהתחבר. עד אז הכפתור מציג הודעה בעברית.
 
 ## ב. Google Cloud: Branding, Data Access, Audience (דורש התחברות של אריאל ל-Google בדפדפן של Claude)
-- [ ] Branding: שם `Gmail Agent`, אימייל תמיכה, לוגו `docs/logo-120.png`, דף הבית `…/about.html`, מדיניות `…/privacy.html`, תנאים `…/terms.html`.
-- [ ] Data Access: תכונה "Email productivity" + נוסח ההסבר להרשאה (באנגלית, נשמר בשיחה; בלי לטעון "לא משמש לאימון מודלים" כל עוד Gemini חינמי).
+- [x] Branding נשמר ואומת (10.10.2026): שם `Gmail Agent`, דף הבית, מדיניות, תנאים ושני דומיינים מורשים (`ppkbuyiatkxpfeqmvwzb.supabase.co`, `arielk29.github.io`).
+- [ ] Branding: להעלות לוגו `docs/logo-120.png` (בורר קבצים, עדיין לא נעשה). שים לב: עם לוגו Google תדרוש אימות גם במצב Testing לפי ההודעה במסך.
+- [ ] Data Access: בדף אין שדות "What features will you use?" וההסבר; הם יופיעו כנראה בהגשת האימות (Verification Center → Prepare for verification). הנוסח באנגלית שמור בשיחה; בלי לטעון "לא משמש לאימון מודלים" כל עוד Gemini חינמי.
 - [ ] Audience: להוסיף את כתובות ה-Gmail של הלקוחות (עד 100 במצב Testing). חסר: הכתובות.
 - [ ] להישאר ב-Testing (החיבור פג כל 7 ימים) עד שנחליט על פרסום.
 
