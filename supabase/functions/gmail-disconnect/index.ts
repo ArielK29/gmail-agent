@@ -22,14 +22,18 @@ Deno.serve(async (req: Request) => {
   const userId = data.user.id;
 
   const { data: connection } = await admin.from('gmail_connections').select('refresh_token').eq('user_id', userId).maybeSingle();
+  // The local data is deleted either way, but the answer says whether Google confirmed the revoke, so the page can be honest.
+  let revoked = !connection?.refresh_token;
   if (connection?.refresh_token) {
-    await fetch('https://oauth2.googleapis.com/revoke', {
+    revoked = await fetch('https://oauth2.googleapis.com/revoke', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ token: connection.refresh_token }),
-    }).catch(() => {});
+    })
+      .then((response) => response.ok)
+      .catch(() => false);
   }
   await admin.from('gmail_digest').delete().eq('user_id', userId);
   await admin.from('gmail_connections').delete().eq('user_id', userId);
-  return reply(200, { ok: true });
+  return reply(200, { ok: true, revoked });
 });

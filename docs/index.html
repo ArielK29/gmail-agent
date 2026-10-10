@@ -171,6 +171,8 @@
       const result = await callFunction('gmail-sync');
       if (result.problems && result.problems.length > 0) {
         $('status').textContent = 'הבדיקה נכשלה: ' + result.problems.join(' | ');
+      } else if (result.throttled) {
+        $('status').textContent = 'בדקת לפני רגע. נסה שוב בעוד כמה שניות.';
       } else {
         $('status').textContent = result.saved > 0 ? `נוספו ${result.saved} מיילים.` : 'אין מיילים חדשים.';
       }
@@ -180,7 +182,13 @@
   };
   $('disconnect').onclick = async () => {
     if (!confirm('לנתק את Gmail ולמחוק את הסיכומים השמורים?')) return;
-    try { await callFunction('gmail-disconnect'); $('status').textContent = 'Gmail נותק.'; await refresh(); }
+    try {
+      const result = await callFunction('gmail-disconnect');
+      await refresh();
+      $('status').textContent = result.revoked === false
+        ? 'הנתונים נמחקו, אבל Google לא אישרה את ביטול ההרשאה. אפשר לבטל ידנית ב-myaccount.google.com/permissions.'
+        : 'Gmail נותק.';
+    }
     catch (e) { $('status').textContent = 'הניתוק נכשל: ' + e.message; }
   };
 

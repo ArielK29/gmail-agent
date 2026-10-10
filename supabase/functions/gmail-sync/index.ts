@@ -23,12 +23,16 @@ const MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.5-flash-lite';
 const CATEGORIES = ['important', 'personal', 'work', 'finance', 'newsletter', 'promotion', 'notification', 'other'];
 const MAX_EMAILS_PER_RUN = 20;
 const MAX_BODY_CHARS = 1500;
+const MANUAL_COOLDOWN_MS = 30_000; // the "check now" button cannot be hammered (protects the model quota)
+const BATCH_SIZE = 5; // members checked in parallel by the scheduled run
+const RUN_BUDGET_MS = 40_000; // stop starting new batches before the 60 s timeout of the scheduled call
 const GMAIL = 'https://gmail.googleapis.com/gmail/v1/users/me';
 
 interface Connection {
   user_id: string;
   refresh_token: string;
   history_id: string | null;
+  last_checked_at: string | null;
 }
 
 interface EmailInfo {
@@ -207,8 +211,9 @@ Deno.serve(async (req: Request) => {
   if (!token) return reply(401, { error: 'not signed in' });
 
   const { data: secret } = await admin.from('agent_secrets').select('value').eq('name', 'cron').maybeSingle();
-  let query = admin.from('gmail_connections').select('user_id, refresh_token, history_id');
-  if (secret && token === secret.value) {
+  let query = admin.from('gmail_connections').select('user_id, refresh_token, history_id, last_checked_at');
+  const scheduled = Boolean(secret) && token === secret!.value;
+  if (scheduled) {
     query = query.order('last_checked_at', { ascending: true, nullsFirst: true }).limit(25); // scheduled run: everybody
   } else {
     const { data, error } = await admin.auth.getUser(token);
@@ -220,15 +225,26 @@ Deno.serve(async (req: Request) => {
   if (error) return reply(500, { error: 'could not read connections' });
   if (!connections || connections.length === 0) return reply(200, { saved: 0, connected: false });
 
+  const list = connections as Connection[];
+  if (!scheduled && list[0].last_checked_at && Date.now() - new Date(list[0].last_checked_at).getTime() < MANUAL_COOLDOWN_MS) {
+    return reply(200, { saved: 0, connected: true, throttled: true, problems: [] });
+  }
+
   let saved = 0;
   const problems: string[] = [];
-  for (const connection of connections as Connection[]) {
-    try {
-      const result = await syncOne(admin, connection);
-      saved += result.saved;
-      if (result.error) problems.push(result.error);
-    } catch (caught) {
-      problems.push(caught instanceof Error ? caught.message : 'unknown error');
+  const startedAt = Date.now();
+  // Members are checked in parallel batches. Whoever is not reached before the time budget runs out is first in line
+  // next time (the list is ordered by last_checked_at), so nobody starves.
+  for (let i = 0; i < list.length; i += BATCH_SIZE) {
+    if (i > 0 && Date.now() - startedAt > RUN_BUDGET_MS) break;
+    const results = await Promise.allSettled(list.slice(i, i + BATCH_SIZE).map((connection) => syncOne(admin, connection)));
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        saved += result.value.saved;
+        if (result.value.error) problems.push(result.value.error);
+      } else {
+        problems.push(result.reason instanceof Error ? result.reason.message : 'unknown error');
+      }
     }
   }
   return reply(200, { saved, connected: true, problems });
