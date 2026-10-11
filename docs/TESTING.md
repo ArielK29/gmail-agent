@@ -216,4 +216,4 @@ Deployed: gmail-sync v16, gmail-callback v6 (records which optional permissions 
 
 Bug found by these tests while building it: the chaos test first failed because the test itself forgot to install its fake Google (a test bug, fixed; the code was right).
 
-Not verified: the real Google Calendar and Tasks answers (needs the two APIs enabled in the Google Cloud project, a member who connects again with the new permissions, and the Google sign-in work of #7). Everything above uses fakes shaped like Google's documented answers.
+Google Cloud (project gmail-agent): the Calendar API and the Tasks API are enabled and both scopes are saved in Data Access. Not verified: the real Google Calendar and Tasks answers (needs a member who connects again with the new permissions: the "add calendar and tasks" button). Everything above uses fakes shaped like Google's documented answers.
