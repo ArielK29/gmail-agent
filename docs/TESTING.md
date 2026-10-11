@@ -1,6 +1,6 @@
 # How the Gmail agent is tested (and how to repeat it)
 
-Last full run: **2026-10-11**, gmail-sync v10. Every line says what was run and what came out.
+Last full run: **2026-10-12**, gmail-sync v12. Every line says what was run and what came out.
 
 ## 1. Unit tests (no network, seconds)
 ```bash
@@ -38,8 +38,7 @@ Five rows including one with HTML in the sender and subject: HTML shown as plain
 4. Repeat the scenario and compare with the table above.
 
 ## Not verified
-- A real Gemini `429` (it cannot be triggered on demand): only the fake-model test covers the retry loop.
-- 30+ new emails in one run against real Gmail (the per-run limit is covered by `planBatch` tests only).
+- A real Gemini `429` and 30+ new emails against a REAL mailbox: they cannot be triggered on demand. Since 2026-10-12 the real `syncOne` code runs against a fake database and fake Google / Gemini answers (section "Sync integration tests"), so the logic is covered; the real services are not.
 - The "Sign in with Google" flow end to end: the provider is not enabled in Supabase yet.
 
 ## Fix runs after the browser end-to-end report (2026-10-11)
@@ -90,3 +89,29 @@ A "סיכום יומי" card at the top of the page: how many mails arrived in t
 - Unit tests: `node --test docs/logic.test.js supabase/functions/gmail-sync/logic.test.ts` -> **32 of 32 pass** (7 new: 24 h window, urgent list and "and N more", categories and actions, broken input, "list may be cut off" warning, Hebrew number forms, Hebrew-only guard). Checked red/green: with the window changed on purpose to 48 h, 2 tests failed; restored, all pass.
 - Browser run (throw-away member, local page): 4 seeded mails, one of them 30 hours old and urgent. The card said "3 מיילים חדשים ב-24 השעות האחרונות", "מייל דחוף אחד" (the old urgent mail was correctly left out), the suggested action, and "כספים: 1 · אישי: 1 · פרסומת: 1". Cleanup: 1 user, 1 connection, no leftover trigger.
 - Not verified: a member with more than 200 mails a day (the "may be incomplete" note is covered by the unit test only), and the card on the live site (it goes live with the push to `main`).
+## Sync integration tests (2026-10-12)
+The work for one member moved from `index.ts` into `sync.ts` (same code, only moved, `index.ts` keeps the HTTP entry point). `sync.test.ts` runs the REAL `syncOne` in Node with a fake database (tables in memory, any write can be made to fail) and fake Google / Gemini answers (a fake `fetch`, a fake clock). No network, no real mailbox, no cost.
+```bash
+node --test supabase/functions/gmail-sync/sync.test.ts
+node --test docs/logic.test.js supabase/functions/gmail-sync/logic.test.ts supabase/functions/gmail-sync/sync.test.ts
+```
+**Result: 14 of 14 pass; all together 46 of 46.**
+
+| Scenario | What the test checks |
+|---|---|
+| 45 new mails | 30 saved in 3 model calls of 10, position NOT moved, usage = 30; next run saves the other 15 (none twice), position moves, usage = 45 |
+| Exactly 30 new mails | Not "behind": position moves |
+| Gemini 429 forever | 4 attempts, pauses 500 / 1000 / 2000 ms, run fails with the model reason, nothing written, connection stays active |
+| Gemini 429, 429, then 200 | Recovers in the same run |
+| Gemini 400 | Not retried |
+| Digest write fails | `could not save`, budget not charged, position stays |
+| Usage write fails | Mails kept, `could not save usage` reported |
+| Position write fails | Mails kept, `could not save` reported; next run skips them (no second model call) and moves the position |
+| Daily budget used up / partly left | 0 summarized and position stays / only the remaining number summarized |
+| `invalid_grant` / other token error | `needs_reconnect` and row kept / throws, connection untouched |
+| History 404 | Starts again from the last 2 days |
+
+**Mutation check (each change made on purpose, tests must go red, then restored):** per-run limit 30 to 100 (2 failed), position always moves (3), usage failure ignored (1), digest failure ignored (1), position failure ignored (1), known mails not skipped (2), chunk 10 to 30 (2). After restoring: 14 of 14 pass.
+
+**Deployed:** gmail-sync v12 (3 files: `index.ts`, `sync.ts`, `logic.ts`). A forced run like the scheduler's: `200`, `{"saved":0,"connected":true,"problems":[]}` (no new mail at that moment).
+Still not covered: the real Gmail and Gemini services themselves.
