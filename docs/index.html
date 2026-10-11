@@ -10,7 +10,7 @@
     body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui, "Segoe UI", Arial, sans-serif; }
     main { max-width: 640px; margin: 0 auto; padding: 24px 16px 64px; }
     h1 { font-size: 28px; margin: 0 0 4px; }
-    p.sub { color: var(--muted); margin: 0 0 24px; }
+    p.sub { color: var(--muted); margin: 0 0 12px; }
     .card { background: var(--surface); border:1px solid var(--line); border-radius: 16px; padding: 16px; margin-bottom: 16px; }
     label { display:block; color: var(--muted); font-size: 14px; margin: 8px 0 4px; }
     input { width:100%; min-height:48px; border-radius:12px; border:1px solid var(--line); background:var(--bg); color:var(--text); padding:0 12px; font-size:16px; }
@@ -19,6 +19,7 @@
     button:disabled { opacity:.5; cursor:default; }
     .row { display:flex; gap:8px; flex-wrap:wrap; }
     .status { color: var(--muted); font-size: 14px; margin-top: 8px; min-height: 20px; }
+    #notice { color: var(--text); margin: 0 0 12px; }
     .item { border-top:1px solid var(--line); padding: 12px 0; }
     .item:first-child { border-top:0; }
     .tag { display:inline-block; font-size:12px; border-radius:999px; padding:2px 10px; background:var(--line); color:var(--accent); margin-inline-start:8px; }
@@ -36,28 +37,34 @@
     .divider { display:flex; align-items:center; gap:12px; color:var(--muted); font-size:14px; margin:16px 0 4px; }
     .divider::before, .divider::after { content:""; flex:1; height:1px; background:var(--line); }
     button.google { width:100%; display:flex; align-items:center; justify-content:center; gap:10px; background:#fff; color:#1f1f1f; }
+    .footer { text-align:center; font-size:14px; margin-top: 16px; }
+    .footer a { display:inline-block; padding:14px 10px; min-height:48px; opacity:.85; }
   </style>
 </head>
 <body>
 <main>
   <h1>סוכן Gmail</h1>
   <p class="sub">קורא את המיילים החדשים שלך (קריאה בלבד), מסווג ומסכם. תוכן המייל לא נשמר.</p>
+  <!-- One message area for both states (signed in and signed out), so a message is never hidden from the member. -->
+  <div id="notice" class="status" role="status"></div>
 
   <section id="login" class="card">
-    <label for="email">אימייל</label>
-    <input id="email" type="email" autocomplete="username" />
-    <label for="password">סיסמה</label>
-    <input id="password" type="password" autocomplete="current-password" />
-    <div class="row">
-      <button id="signIn">התחברות</button>
-      <button id="signUp" class="secondary">יצירת חשבון</button>
-    </div>
+    <form id="loginForm" novalidate>
+      <label for="email">אימייל</label>
+      <input id="email" type="email" autocomplete="username" />
+      <label for="password">סיסמה</label>
+      <input id="password" type="password" autocomplete="current-password" />
+      <div class="row">
+        <button id="signIn" type="submit">התחברות</button>
+        <button id="signUp" type="button" class="secondary">יצירת חשבון</button>
+      </div>
+    </form>
     <div class="divider"><span>או</span></div>
     <button id="google" class="google" type="button">
       <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.5 5.4 2.6 13.2l7.9 6.1C12.4 13.6 17.7 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.5 5.8c4.4-4.1 7.1-10.1 7.1-17.5z"/><path fill="#FBBC05" d="M10.5 28.7c-.5-1.5-.8-3-.8-4.7s.3-3.2.8-4.7l-7.9-6.1C.9 16.4 0 20.1 0 24s.9 7.6 2.6 10.8l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.5-5.8c-2.1 1.4-4.9 2.3-8.4 2.3-6.3 0-11.6-4.1-13.5-9.8l-7.9 6.1C6.5 42.6 14.6 48 24 48z"/></svg>
       התחבר עם Google
     </button>
-    <div id="loginStatus" class="status"></div>
+    <div id="loginStatus" class="status" role="alert"></div>
   </section>
 
   <section id="app" class="card hidden">
@@ -68,7 +75,6 @@
       <button id="disconnect" class="secondary hidden">נתק את Gmail ומחק את הנתונים שלי</button>
       <button id="signOut" class="secondary">התנתקות</button>
     </div>
-    <div id="status" class="status"></div>
   </section>
 
   <section id="digestCard" class="card hidden">
@@ -87,26 +93,30 @@
     <div id="digest"></div>
   </section>
 
-  <p style="text-align:center;font-size:14px;opacity:.7;margin-top:24px">
+  <p class="footer">
     <a href="about.html">אודות</a> · <a href="privacy.html">מדיניות פרטיות</a> · <a href="terms.html">תנאי שימוש</a>
   </p>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js"></script>
+<script src="logic.js"></script>
 <script>
   // config.js defines window.APP_CONFIG = { supabaseUrl, supabaseKey } (the publishable key; never a secret key).
   const { supabaseUrl, supabaseKey } = window.APP_CONFIG;
+  const logic = window.AgentLogic; // Hebrew messages and validation, tested in Node (docs/logic.test.js)
   const db = supabase.createClient(supabaseUrl, supabaseKey);
   const $ = (id) => document.getElementById(id);
   const CATEGORY_HE = { important:'חשוב', personal:'אישי', work:'עבודה', finance:'כספים', newsletter:'ניוזלטר', promotion:'פרסומת', notification:'התראה', other:'אחר' };
+  const LOAD_ERROR = 'לא הצלחנו לטעון את הנתונים. רענן את הדף.';
 
   function show(el, on) { el.classList.toggle('hidden', !on); }
+  const notify = (text) => { $('notice').textContent = text; };
 
   async function callFunction(name) {
     const { data, error } = await db.functions.invoke(name, { body: {} });
     if (error) {
-      // Show the real reason the server gave (for example a missing secret), not a generic message.
+      // The server's own reason is kept in the Error for debugging; the page always shows Hebrew text.
       let detail = '';
       try { detail = (await error.context.json()).error || ''; } catch { detail = ''; }
       throw new Error(detail || error.message || 'unknown');
@@ -116,6 +126,7 @@
 
   // All text from emails is put on the page with textContent (never as HTML).
   let allRows = [];
+  let connectionState = { connected: false, expired: false };
 
   // Fill the category filter once, from the same list used for the labels.
   for (const [value, label] of Object.entries(CATEGORY_HE)) {
@@ -135,7 +146,7 @@
       (!term || [row.from_name, row.subject, row.summary, row.suggested_action].some((text) => (text || '').toLowerCase().includes(term)))
     );
     $('digestCount').textContent = allRows.length ? `מוצגים ${rows.length} מתוך ${allRows.length}` : '';
-    if (allRows.length === 0) { box.textContent = 'עוד אין מיילים. לחץ "בדוק מיילים חדשים עכשיו".'; return; }
+    if (allRows.length === 0) { box.textContent = logic.emptyStateText(connectionState); return; }
     if (rows.length === 0) { box.textContent = 'אין מיילים שמתאימים לסינון.'; return; }
     for (const row of rows) {
       const item = document.createElement('div'); item.className = 'item';
@@ -165,9 +176,16 @@
     show($('login'), !signedIn); show($('app'), signedIn); show($('digestCard'), signedIn);
     if (!signedIn) return;
 
-    const { data: connection } = await db.from('gmail_connections').select('google_email, last_checked_at, status').maybeSingle();
+    const connectionResult = await db.from('gmail_connections').select('google_email, last_checked_at, status').maybeSingle();
+    const digestResult = await db.from('gmail_digest').select('from_name, subject, category, summary, urgency, suggested_action, received_at')
+      .order('received_at', { ascending: false }).limit(200);
+    // A database error must never look like "not connected" or "no emails".
+    if (connectionResult.error || digestResult.error) { notify(LOAD_ERROR); return; }
+
+    const connection = connectionResult.data;
     const connected = Boolean(connection);
     const expired = connected && connection.status === 'needs_reconnect';
+    connectionState = { connected, expired };
     $('connection').textContent = expired
       ? 'החיבור ל-Gmail פג (Google ביטלה את ההרשאה, או שעברו 7 ימים בגרסת הבדיקה). לחץ "חבר את Gmail" כדי לחבר מחדש.'
       : connected
@@ -175,22 +193,23 @@
         : 'Gmail עדיין לא מחובר.';
     show($('connect'), !connected || expired); show($('check'), connected && !expired); show($('disconnect'), connected);
 
-    const { data: rows } = await db.from('gmail_digest').select('from_name, subject, category, summary, urgency, suggested_action, received_at')
-      .order('received_at', { ascending: false }).limit(200);
-    allRows = rows || [];
+    allRows = digestResult.data || [];
     renderDigest();
   }
 
   async function authAction(kind) {
     $('loginStatus').textContent = '';
+    const problem = logic.validateCredentials($('email').value, $('password').value);
+    if (problem) { $('loginStatus').textContent = problem; return; }
     const credentials = { email: $('email').value.trim(), password: $('password').value };
     const { error } = kind === 'in' ? await db.auth.signInWithPassword(credentials) : await db.auth.signUp(credentials);
-    if (error) { $('loginStatus').textContent = 'לא הצלחנו: ' + error.message; return; }
+    if (error) { $('loginStatus').textContent = logic.authMessage(error); return; }
     if (kind === 'up') $('loginStatus').textContent = 'נשלח מייל אישור (אם נדרש). אחרי האישור התחבר.';
     refresh();
   }
 
-  $('signIn').onclick = () => authAction('in');
+  // A real form: Enter submits, password managers and the mobile "Go" key work.
+  $('loginForm').addEventListener('submit', (event) => { event.preventDefault(); authAction('in'); });
   $('signUp').onclick = () => authAction('up');
   // Sign in with Google (identity only: email + profile). Reading Gmail is a separate, explicit step ("connect Gmail").
   $('google').onclick = async () => {
@@ -207,31 +226,30 @@
       provider: 'google',
       options: { redirectTo: location.origin + location.pathname },
     });
-    if (error) $('loginStatus').textContent = 'לא הצלחנו: ' + error.message;
+    if (error) $('loginStatus').textContent = logic.authMessage(error);
   };
   $('signOut').onclick = async () => { await db.auth.signOut(); refresh(); };
 
   $('connect').onclick = async () => {
-    $('status').textContent = 'פותח את Google...';
+    notify('פותח את Google...');
     try { const { url } = await callFunction('gmail-connect'); window.location.href = url; }
-    catch (e) { $('status').textContent = 'משהו השתבש: ' + e.message; }
+    catch { notify('לא הצלחנו לפתוח את Google. נסה שוב.'); }
   };
   $('check').onclick = async () => {
-    $('check').disabled = true; $('status').textContent = 'בודק מיילים חדשים...';
+    $('check').disabled = true; notify('בודק מיילים חדשים...');
     try {
       const result = await callFunction('gmail-sync');
       if (result.problems && result.problems.length > 0) {
-        $('status').textContent = 'הבדיקה נכשלה: ' + result.problems.join(' | ');
+        notify(result.problems.map(logic.problemMessage).join(' '));
       } else if (result.needsReconnect) {
-        $('status').textContent = 'החיבור פג. לחץ "חבר את Gmail" כדי לחבר מחדש.';
-        await refresh();
+        notify('החיבור פג. לחץ "חבר את Gmail" כדי לחבר מחדש.');
       } else if (result.throttled) {
-        $('status').textContent = 'בדקת לפני רגע. נסה שוב בעוד כמה שניות.';
+        notify('בדקת לפני רגע. נסה שוב בעוד כמה שניות.');
       } else {
-        $('status').textContent = result.saved > 0 ? `נוספו ${result.saved} מיילים.` : 'אין מיילים חדשים.';
+        notify(result.saved > 0 ? `נוספו ${result.saved} מיילים.` : 'אין מיילים חדשים.');
       }
       await refresh();
-    } catch (e) { $('status').textContent = 'הבדיקה נכשלה: ' + e.message; }
+    } catch (e) { notify(logic.problemMessage(e.message)); }
     $('check').disabled = false;
   };
   $('disconnect').onclick = async () => {
@@ -239,18 +257,19 @@
     try {
       const result = await callFunction('gmail-disconnect');
       await refresh();
-      $('status').textContent = result.revoked === false
+      notify(result.revoked === false
         ? 'הנתונים נמחקו, אבל Google לא אישרה את ביטול ההרשאה. אפשר לבטל ידנית ב-myaccount.google.com/permissions.'
-        : 'Gmail נותק.';
-    }
-    catch (e) { $('status').textContent = 'הניתוק נכשל: ' + e.message; }
+        : 'Gmail נותק.');
+    } catch { notify('לא הצלחנו לנתק ולמחוק. נסה שוב.'); }
   };
 
+  // Result of the Google consent (the function redirects back with ?gmail=...). Shown in the notice area, which is
+  // visible even when the member is signed out.
   const result = new URLSearchParams(location.search).get('gmail');
   if (result) {
     history.replaceState(null, '', location.pathname);
     const texts = { connected: 'Gmail חובר בהצלחה.', cancelled: 'החיבור בוטל.', expired: 'הקישור פג תוקף. נסה שוב.', error: 'החיבור נכשל. נסה שוב.' };
-    setTimeout(() => { $('status').textContent = texts[result] || ''; }, 300);
+    notify(texts[result] || '');
   }
   db.auth.onAuthStateChange(() => refresh());
   refresh();
