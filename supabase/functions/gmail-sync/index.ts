@@ -257,14 +257,23 @@ async function syncOne(admin: SupabaseClient, connection: Connection): Promise<{
   if (rows.length > 0) {
     const { error } = await admin.from('gmail_digest').upsert(rows, { onConflict: 'user_id,gmail_message_id' });
     if (error) return { saved: 0, error: 'could not save' };
-    await admin
+    const usageWrite = await admin
       .from('gmail_usage')
       .upsert({ user_id: connection.user_id, day, emails: (usage?.emails ?? 0) + rows.length }, { onConflict: 'user_id,day' });
+    if (usageWrite.error) {
+      // Without the counter the daily budget would not be enforced: say so instead of ignoring it.
+      console.error('usage write failed');
+      return { saved: rows.length, error: 'could not save usage' };
+    }
   }
   // The position only moves forward when nothing is left waiting, so no email is ever skipped.
   const update: Record<string, unknown> = { last_checked_at: new Date().toISOString() };
   if (!behind) update.history_id = historyId;
-  await admin.from('gmail_connections').update(update).eq('user_id', connection.user_id);
+  const positionWrite = await admin.from('gmail_connections').update(update).eq('user_id', connection.user_id);
+  if (positionWrite.error) {
+    console.error('position write failed');
+    return { saved: rows.length, error: 'could not save' };
+  }
   return { saved: rows.length };
 }
 

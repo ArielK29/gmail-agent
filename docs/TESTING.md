@@ -41,3 +41,26 @@ Five rows including one with HTML in the sender and subject: HTML shown as plain
 - A real Gemini `429` (it cannot be triggered on demand): only the fake-model test covers the retry loop.
 - 30+ new emails in one run against real Gmail (the per-run limit is covered by `planBatch` tests only).
 - The "Sign in with Google" flow end to end: the provider is not enabled in Supabase yet.
+
+## Fix runs after the browser end-to-end report (2026-10-11)
+
+### Issue #3: server writes must not fail silently (gmail-disconnect v5, gmail-sync v11)
+Run with a throw-away member (seeded and deleted afterwards), a visible browser pane and a trigger that makes deletes on `gmail_digest` fail on purpose.
+
+| Step | Result |
+|---|---|
+| Disconnect while the delete is blocked | The page says "לא הצלחנו לנתק ולמחוק. נסה שוב." The connection, the token and the 3 summaries are all still in the database (checked with SQL). Nothing was revoked at Google. |
+| Remove the trigger, disconnect again | Success: the page is empty and says "חבר את Gmail", the member's rows and connection are gone, the message honestly says Google did not confirm the revoke (the token was fake). The owner's 56 rows and connection were unchanged. |
+| Cleanup | Trigger and function dropped, throw-away member deleted: 1 user, 1 connection, 56 rows. |
+| gmail-sync v11 in production | A forced run: `200`, `problems: []`, position and last-checked written. |
+
+Not exercised: a failing write to `gmail_usage` or to the position in gmail-sync (it needs a member with a valid Gmail token; the owner's real mailbox is not used for this). Those two branches are covered by reading the code and the bundle check only.
+
+### Issue #4: nothing English reaches the customer
+`node --test docs/logic.test.js`: 7 of 7 pass. The guard test was checked the other way too: when `problemMessage` was changed on purpose to return an English sentence, the guard FAILED (red), and after restoring it passed (green).
+
+### Run all tests
+```bash
+node --test docs/logic.test.js supabase/functions/gmail-sync/logic.test.ts
+```
+Expected: 25 of 25 pass.

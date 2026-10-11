@@ -1,4 +1,6 @@
-// "Disconnect Gmail": revokes the token at Google, then deletes the connection and the saved digest.
+// "Disconnect Gmail": deletes the member's saved digest and connection, then revokes the token at Google.
+// Order matters: nothing is revoked until the deletes worked, so a failed delete can simply be retried.
+// A failed delete is reported (never a silent "ok").
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const cors = {
@@ -22,7 +24,21 @@ Deno.serve(async (req: Request) => {
   const userId = data.user.id;
 
   const { data: connection } = await admin.from('gmail_connections').select('refresh_token').eq('user_id', userId).maybeSingle();
-  // The local data is deleted either way, but the answer says whether Google confirmed the revoke, so the page can be honest.
+
+  // 1. the summaries first: if this fails the connection (and the token) stay, and the member can try again.
+  const digest = await admin.from('gmail_digest').delete().eq('user_id', userId);
+  if (digest.error) {
+    console.error('disconnect: could not delete the digest');
+    return reply(500, { error: 'delete_failed' });
+  }
+  // 2. the connection
+  const removed = await admin.from('gmail_connections').delete().eq('user_id', userId);
+  if (removed.error) {
+    console.error('disconnect: could not delete the connection');
+    return reply(500, { error: 'delete_failed' });
+  }
+
+  // 3. revoke at Google (best effort; the answer tells the page whether Google confirmed it)
   let revoked = !connection?.refresh_token;
   if (connection?.refresh_token) {
     revoked = await fetch('https://oauth2.googleapis.com/revoke', {
@@ -33,7 +49,5 @@ Deno.serve(async (req: Request) => {
       .then((response) => response.ok)
       .catch(() => false);
   }
-  await admin.from('gmail_digest').delete().eq('user_id', userId);
-  await admin.from('gmail_connections').delete().eq('user_id', userId);
   return reply(200, { ok: true, revoked });
 });
