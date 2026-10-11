@@ -1,6 +1,6 @@
-import { test } from 'node:test';
+﻿import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanText, decodeBytes, parseModelAnswer, isRetryable, backoffMs, remainingBudget, utcDay } from './logic.ts';
+import { cleanText, decodeBytes, parseModelAnswer, isRetryable, backoffMs, remainingBudget, utcDay, callWithRetry, planBatch, classifyTokenResponse } from './logic.ts';
 
 test('cleanText removes links and cuts the length', () => {
   assert.equal(cleanText('לחץ https://evil.example/x עכשיו', 100), 'לחץ עכשיו');
@@ -58,4 +58,77 @@ test('remainingBudget never goes below zero', () => {
 test('utcDay uses the UTC date, so midnight UTC starts a new row', () => {
   assert.equal(utcDay(new Date('2026-10-11T23:59:59Z')), '2026-10-11');
   assert.equal(utcDay(new Date('2026-10-12T00:00:01Z')), '2026-10-12');
+});
+
+
+// --- retry loop against a fake model: the real code path, with a fake fetch and a fake clock ---
+const fakeResponses = (statuses: number[]) => {
+  const state = { calls: 0, waits: [] as number[] };
+  const doFetch = async () => ({ status: statuses[Math.min(state.calls++, statuses.length - 1)] });
+  const sleep = async (ms: number) => { state.waits.push(ms); };
+  return { state, doFetch, sleep };
+};
+
+test('callWithRetry retries 429 and 503 and then succeeds', async () => {
+  const { state, doFetch, sleep } = fakeResponses([429, 503, 200]);
+  const response = await callWithRetry(doFetch, sleep);
+  assert.equal(response.status, 200);
+  assert.equal(state.calls, 3);
+  assert.deepEqual(state.waits, [500, 1000]);
+});
+
+test('callWithRetry gives up after 3 retries and returns the last answer', async () => {
+  const { state, doFetch, sleep } = fakeResponses([429]);
+  const response = await callWithRetry(doFetch, sleep);
+  assert.equal(response.status, 429);
+  assert.equal(state.calls, 4);
+  assert.deepEqual(state.waits, [500, 1000, 2000]);
+});
+
+test('callWithRetry does not retry a client error', async () => {
+  const { state, doFetch, sleep } = fakeResponses([400]);
+  const response = await callWithRetry(doFetch, sleep);
+  assert.equal(response.status, 400);
+  assert.equal(state.calls, 1);
+  assert.deepEqual(state.waits, []);
+});
+
+// --- daily budget exhausted ---
+test('planBatch: budget left, more than the per-run limit', () => {
+  const ids = Array.from({ length: 50 }, (_, i) => 'm' + i);
+  const plan = planBatch(ids, 30, 300);
+  assert.equal(plan.batch.length, 30);
+  assert.equal(plan.behind, true);
+});
+
+test('planBatch: budget exhausted keeps everything waiting and the position must not move', () => {
+  const plan = planBatch(['a', 'b'], 30, 0);
+  assert.deepEqual(plan.batch, []);
+  assert.equal(plan.behind, true);
+});
+
+test('planBatch: nothing pending is not behind, even with no budget', () => {
+  assert.deepEqual(planBatch([], 30, 0), { batch: [], behind: false });
+});
+
+test('planBatch: the budget cuts the batch in the middle of a run', () => {
+  const plan = planBatch(['a', 'b', 'c', 'd'], 30, 2);
+  assert.deepEqual(plan.batch, ['a', 'b']);
+  assert.equal(plan.behind, true);
+});
+
+// --- Google token answers: only invalid_grant kills the connection ---
+test('classifyTokenResponse: a good answer gives a token', () => {
+  assert.deepEqual(classifyTokenResponse(200, { access_token: 't' }), { kind: 'ok', token: 't' });
+});
+
+test('classifyTokenResponse: only 400 invalid_grant means revoked or expired', () => {
+  assert.deepEqual(classifyTokenResponse(400, { error: 'invalid_grant' }), { kind: 'revoked' });
+});
+
+test('classifyTokenResponse: temporary or other errors never mean revoked', () => {
+  assert.equal(classifyTokenResponse(503, {}).kind, 'failed');
+  assert.equal(classifyTokenResponse(429, { error: 'rate_limit' }).kind, 'failed');
+  assert.equal(classifyTokenResponse(400, { error: 'invalid_client' }).kind, 'failed');
+  assert.equal(classifyTokenResponse(200, {}).kind, 'failed');
 });

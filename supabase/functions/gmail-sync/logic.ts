@@ -59,3 +59,35 @@ export const backoffMs = (attempt: number): number => Math.min(8000, 500 * 2 ** 
 // Daily budget per member: how many emails may still be summarized today (the day is the UTC date).
 export const remainingBudget = (used: number, cap: number): number => Math.max(0, cap - used);
 export const utcDay = (date: Date): string => date.toISOString().slice(0, 10);
+
+// Calls the model and retries temporary failures (429 / 5xx) up to `maxRetries` times with growing pauses.
+// `doFetch` and `sleep` are passed in so the loop can be tested with a fake model and a fake clock.
+export async function callWithRetry<T extends { status: number }>(
+  doFetch: () => Promise<T>,
+  sleep: (ms: number) => Promise<void>,
+  maxRetries = 3
+): Promise<T> {
+  let response = await doFetch();
+  for (let attempt = 0; attempt < maxRetries && isRetryable(response.status); attempt++) {
+    await sleep(backoffMs(attempt));
+    response = await doFetch();
+  }
+  return response;
+}
+
+// Which emails to summarize now. `behind` = some are left waiting (per-run limit or the daily budget), so the Gmail
+// history position must NOT move forward.
+export function planBatch(pending: string[], maxPerRun: number, allowed: number): { batch: string[]; behind: boolean } {
+  const batch = pending.slice(0, Math.max(0, Math.min(maxPerRun, allowed)));
+  return { batch, behind: pending.length > batch.length };
+}
+
+// Only Google's 400 "invalid_grant" means the access is really gone (revoked, expired after 7 days in Testing mode,
+// password change). Everything else (network, 5xx, 429, a wrong client) is temporary or our own problem and must never
+// touch the member's connection.
+export type TokenOutcome = { kind: 'ok'; token: string } | { kind: 'revoked' } | { kind: 'failed'; reason: string };
+export function classifyTokenResponse(status: number, body: { access_token?: string; error?: string }): TokenOutcome {
+  if (status >= 200 && status < 300 && body.access_token) return { kind: 'ok', token: body.access_token };
+  if (status === 400 && body.error === 'invalid_grant') return { kind: 'revoked' };
+  return { kind: 'failed', reason: 'Google token: ' + (body.error ?? status) };
+}

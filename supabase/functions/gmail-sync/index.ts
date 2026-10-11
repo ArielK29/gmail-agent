@@ -15,10 +15,11 @@ import { createClient, SupabaseClient } from 'npm:@supabase/supabase-js@2';
 import {
   URGENCIES,
   CATEGORIES,
-  backoffMs,
+  callWithRetry,
+  classifyTokenResponse,
   decodeBytes,
-  isRetryable,
   parseModelAnswer,
+  planBatch,
   remainingBudget,
   utcDay,
   type Classified,
@@ -81,10 +82,10 @@ async function getAccessToken(refreshToken: string): Promise<TokenResult> {
       grant_type: 'refresh_token',
     }),
   });
-  const body = await response.json().catch(() => ({}));
-  if (response.ok && body.access_token) return { token: body.access_token };
-  if (response.status === 400 && body.error === 'invalid_grant') return { revoked: true };
-  return { failed: 'Google token: ' + (body.error ?? response.status) };
+  const outcome = classifyTokenResponse(response.status, await response.json().catch(() => ({})));
+  if (outcome.kind === 'ok') return { token: outcome.token };
+  if (outcome.kind === 'revoked') return { revoked: true };
+  return { failed: outcome.reason };
 }
 
 async function gmail(path: string, accessToken: string): Promise<{ status: number; body: any }> {
@@ -169,14 +170,11 @@ Reply with ONLY a JSON array, one object per email, in the same order: {"id": "<
 
 // Rate limits and server errors of the model are retried a few times with growing pauses. The waiting stays well inside
 // the 60 s budget of a scheduled run (0.5 + 1 + 2 seconds at most per call).
-async function callModel(url: string, init: RequestInit): Promise<Response> {
-  let response = await fetch(url, init);
-  for (let attempt = 0; attempt < 3 && isRetryable(response.status); attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, backoffMs(attempt)));
-    response = await fetch(url, init);
-  }
-  return response;
-}
+const callModel = (url: string, init: RequestInit): Promise<Response> =>
+  callWithRetry(
+    () => fetch(url, init),
+    (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+  );
 
 // One model call for a small chunk. HTTP errors throw (the whole run is retried later, nothing is lost). An answer that is
 // not valid JSON gives an empty map, so those emails get the "could not summarize" row instead of blocking the run forever.
@@ -234,8 +232,7 @@ async function syncOne(admin: SupabaseClient, connection: Connection): Promise<{
   const day = utcDay(new Date());
   const { data: usage } = await admin.from('gmail_usage').select('emails').eq('user_id', connection.user_id).eq('day', day).maybeSingle();
   const allowed = remainingBudget(usage?.emails ?? 0, MAX_EMAILS_PER_DAY);
-  const batch = pending.slice(0, Math.min(MAX_NEW_PER_RUN, allowed));
-  const behind = pending.length > batch.length; // per-run limit or daily budget: the rest waits and the position does not move
+  const { batch, behind } = planBatch(pending, MAX_NEW_PER_RUN, allowed); // behind: the rest waits and the position does not move
 
   const emails = (await Promise.all(batch.map((id) => readEmail(id, accessToken)))).filter((item): item is EmailInfo => item !== null);
   const rows = [];
