@@ -1,4 +1,4 @@
-// Pure UI decisions of the Gmail agent page. Loaded by index.html (window.AgentLogic) and tested with `node --test`.
+﻿// Pure UI decisions of the Gmail agent page. Loaded by index.html (window.AgentLogic) and tested with `node --test`.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.AgentLogic = factory();
@@ -39,6 +39,7 @@
     if (t.startsWith('Gemini:')) return 'שירות הסיכום לא זמין כרגע או הגיע למכסה. ננסה שוב אוטומטית.';
     if (t.startsWith('Gmail:')) return 'Gmail לא ענה כרגע. ננסה שוב אוטומטית.';
     if (t.startsWith('Google token')) return 'לא הצלחנו להתחבר ל-Google כרגע. ננסה שוב אוטומטית.';
+    if (t.startsWith('could not save usage')) return 'הסיכומים נשמרו, אבל לא הצלחנו לעדכן את מונה השימוש. ננסה שוב אוטומטית.';
     if (t.startsWith('could not save')) return 'לא הצלחנו לשמור את הסיכומים. ננסה שוב אוטומטית.';
     return GENERIC;
   }
@@ -51,3 +52,4 @@
 
   return { authMessage, validateCredentials, problemMessage, emptyStateText };
 });
+

@@ -41,3 +41,22 @@ test('emptyStateText follows the real connection state', () => {
   assert.equal(emptyStateText({ connected: true, expired: true }), 'החיבור פג. חבר שוב כדי להמשיך.');
   assert.equal(emptyStateText({ connected: true, expired: false }), 'עוד אין מיילים. לחץ "בדוק מיילים חדשים עכשיו".');
 });
+
+test('problemMessage separates "usage counter failed" from "summaries failed"', () => {
+  assert.equal(problemMessage('could not save usage'), 'הסיכומים נשמרו, אבל לא הצלחנו לעדכן את מונה השימוש. ננסה שוב אוטומטית.');
+  assert.equal(problemMessage('could not save'), 'לא הצלחנו לשמור את הסיכומים. ננסה שוב אוטומטית.');
+});
+
+// Guard (issue #4): nothing the page can show comes out in English. The only Latin letters allowed are the
+// brand names "Gmail" and "Google" inside a Hebrew sentence.
+test('every message the page can show is Hebrew (brand names aside)', () => {
+  const withoutBrands = (text) => text.replace(/Gmail|Google/g, '');
+  const samples = ['', 'x', 'Gemini: ???', 'Gmail: 500', 'Google token: boom', 'could not save usage', 'could not save', 'delete_failed', 'access was revoked or expired: connect Gmail again', 'unknown error'];
+  for (const sample of samples) assert.doesNotMatch(withoutBrands(problemMessage(sample)), /[A-Za-z]/, `problemMessage(${JSON.stringify(sample)})`);
+  const errors = [null, undefined, {}, { message: 'x' }, { code: 'weird' }, { message: 'Invalid login credentials' }, { message: 'Failed to fetch' }];
+  for (const error of errors) assert.doesNotMatch(withoutBrands(authMessage(error)), /[A-Za-z]/, `authMessage(${JSON.stringify(error)})`);
+  for (const state of [{ connected: false, expired: false }, { connected: true, expired: true }, { connected: true, expired: false }]) {
+    assert.doesNotMatch(withoutBrands(emptyStateText(state)), /[A-Za-z]/);
+  }
+  for (const [e, p] of [['', ''], ['a@b', 'x'], ['a@b.co', '']]) assert.doesNotMatch(withoutBrands(String(validateCredentials(e, p))), /[A-Za-z]/);
+});
