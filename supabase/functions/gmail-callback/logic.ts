@@ -17,3 +17,10 @@ export function backUrl(appUrl: string, result: string): string {
   const safe = RESULTS.has(result) ? result : 'error';
   return `${appUrl}${appUrl.includes('?') ? '&' : '?'}gmail=${safe}`;
 }
+export const GOOGLE_CALENDAR = 'https://www.googleapis.com/auth/calendar.readonly';
+export const GOOGLE_TASKS = 'https://www.googleapis.com/auth/tasks.readonly';
+// The optional permissions the member kept ticked on Google's screen. Only these exact scopes count.
+export function optionalScopes(tokens: any): { calendar: boolean; tasks: boolean } {
+  const granted = String(tokens?.scope ?? '').split(/\s+/).filter(Boolean);
+  return { calendar: granted.includes(GOOGLE_CALENDAR), tasks: granted.includes(GOOGLE_TASKS) };
+}

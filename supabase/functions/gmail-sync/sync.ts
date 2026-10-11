@@ -23,6 +23,11 @@ import {
   isReplyWorthy,
   pickReplyCandidates,
   threadNeedsReply,
+  parseEvents,
+  parseTasks,
+  isMissingPermission,
+  shouldRefreshAgenda,
+  type AgendaRow,
   planBatch,
   remainingBudget,
   utcDay,
@@ -52,6 +57,9 @@ export interface Connection {
   last_checked_at: string | null;
   last_attempt_at?: string | null;
   status: string;
+  has_calendar?: boolean;
+  has_tasks?: boolean;
+  agenda_checked_at?: string | null;
 }
 
 export interface EmailInfo {
@@ -316,6 +324,11 @@ export async function syncOne(admin: SupabaseClient, connection: Connection): Pr
   } catch {
     console.error('reply check failed'); // never turns a good sync into a failed one
   }
+  try {
+    await refreshAgenda(admin, connection, accessToken, Date.now());
+  } catch {
+    console.error('agenda check failed'); // the calendar and the tasks never turn a good sync into a failed one
+  }
   return { saved: rows.length };
 }
 
@@ -356,4 +369,93 @@ export async function refreshReplyState(admin: SupabaseClient, userId: string, a
     if (!saved.error) checked++;
   }
   return { checked };
+}
+
+// ======================= Calendar and tasks (issue #20) =======================
+const CAL_URL = 'https://www.googleapis.com/calendar/v3/calendars/primary/events';
+const TASKS_URL = 'https://tasks.googleapis.com/tasks/v1';
+const MAX_TASK_LISTS = 10;
+type Fetched = { rows: AgendaRow[] } | { missing: true } | { skip: true };
+
+async function googleGet(url: string, accessToken: string): Promise<{ status: number; body: any }> {
+  const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  return { status: response.status, body: await response.json().catch(() => ({})) };
+}
+
+async function fetchEvents(accessToken: string, nowMs: number): Promise<Fetched> {
+  const params = new URLSearchParams({
+    timeMin: new Date(nowMs - 12 * 3600_000).toISOString(),
+    timeMax: new Date(nowMs + 48 * 3600_000).toISOString(),
+    singleEvents: 'true',
+    orderBy: 'startTime',
+    maxResults: '50',
+  });
+  const answer = await googleGet(`${CAL_URL}?${params}`, accessToken);
+  if (isMissingPermission(answer.status, answer.body)) return { missing: true };
+  if (answer.status !== 200) return { skip: true };
+  return { rows: parseEvents(answer.body) };
+}
+
+async function fetchTasks(accessToken: string, nowMs: number): Promise<Fetched> {
+  const lists = await googleGet(`${TASKS_URL}/users/@me/lists?maxResults=${MAX_TASK_LISTS}`, accessToken);
+  if (isMissingPermission(lists.status, lists.body)) return { missing: true };
+  if (lists.status !== 200) return { skip: true };
+  const rows: AgendaRow[] = [];
+  const seen = new Set<string>();
+  for (const list of (Array.isArray(lists.body?.items) ? lists.body.items : []).slice(0, MAX_TASK_LISTS)) {
+    if (typeof list?.id !== 'string') continue;
+    const params = new URLSearchParams({ showCompleted: 'false', showHidden: 'false', maxResults: '100', dueMax: new Date(nowMs + 14 * 86400_000).toISOString() });
+    const answer = await googleGet(`${TASKS_URL}/lists/${encodeURIComponent(list.id)}/tasks?${params}`, accessToken);
+    if (isMissingPermission(answer.status, answer.body)) return { missing: true };
+    if (answer.status !== 200) return { skip: true }; // one list failed: keep what we have, ask again later (never delete tasks of a list we could not read)
+    rows.push(...parseTasks(answer.body, seen));
+  }
+  return { rows };
+}
+
+// Replaces the member's saved events or tasks with the fresh set: new and changed ones are written first, and only then the
+// ones that are no longer there are removed, so a failed write never leaves the member with an empty day.
+async function replaceKind(admin: SupabaseClient, userId: string, kind: 'event' | 'task', rows: AgendaRow[]): Promise<boolean> {
+  if (rows.length > 0) {
+    const written = await admin.from('gmail_agenda').upsert(rows.map((row) => ({ ...row, user_id: userId })), { onConflict: 'user_id,kind,external_id' });
+    if (written.error) return false;
+  }
+  const { data: existing, error } = await admin.from('gmail_agenda').select('external_id').eq('user_id', userId).eq('kind', kind);
+  if (error) return false;
+  const keep = new Set(rows.map((row) => row.external_id));
+  const stale = (existing ?? []).map((row: { external_id: string }) => row.external_id).filter((id: string) => !keep.has(id));
+  if (stale.length > 0) {
+    const removed = await admin.from('gmail_agenda').delete().eq('user_id', userId).eq('kind', kind).in('external_id', stale);
+    if (removed.error) return false;
+  }
+  return true;
+}
+
+// Best effort on top of a finished sync (the caller catches everything). Only members who ticked the permission are asked,
+// at most every 10 minutes. A permission Google says is gone is switched off and its saved rows are deleted.
+export async function refreshAgenda(admin: SupabaseClient, connection: Connection, accessToken: string, nowMs: number): Promise<void> {
+  const wantEvents = connection.has_calendar === true;
+  const wantTasks = connection.has_tasks === true;
+  if (!wantEvents && !wantTasks) return;
+  if (!shouldRefreshAgenda(connection.agenda_checked_at, nowMs)) return;
+  // Stamp first: even a failing run must not be repeated at every sync (quota), and a crash below only delays the next try.
+  await admin.from('gmail_connections').update({ agenda_checked_at: new Date(nowMs).toISOString() }).eq('user_id', connection.user_id);
+
+  const settle = async (kind: 'event' | 'task', result: Fetched) => {
+    if ('rows' in result) return replaceKind(admin, connection.user_id, kind, result.rows);
+    if ('missing' in result) {
+      await admin.from('gmail_connections').update(kind === 'event' ? { has_calendar: false } : { has_tasks: false }).eq('user_id', connection.user_id);
+      await admin.from('gmail_agenda').delete().eq('user_id', connection.user_id).eq('kind', kind);
+    }
+    return false;
+  };
+  const safe = async (run: () => Promise<Fetched>): Promise<Fetched> => {
+    try {
+      return await run();
+    } catch {
+      return { skip: true }; // a network blip
+    }
+  };
+  if (wantEvents) await settle('event', await safe(() => fetchEvents(accessToken, nowMs)));
+  if (wantTasks) await settle('task', await safe(() => fetchTasks(accessToken, nowMs)));
 }

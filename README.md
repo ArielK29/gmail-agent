@@ -5,7 +5,7 @@
 ## החלטות ארכיטקטורה
 | נושא | החלטה |
 |---|---|
-| חיבור ל-Gmail | OAuth נפרד מההתחברות, הרשאה `gmail.readonly` בלבד, `access_type=offline` (refresh token) |
+| חיבור ל-Gmail | OAuth נפרד מההתחברות, הרשאה `gmail.readonly` (חובה) + `calendar.readonly` ו-`tasks.readonly` (רשות, קריאה בלבד), `access_type=offline` (refresh token) |
 | איפה נשמר ה-token | טבלה בשרת (`gmail_connections`). הדפדפן לא יכול לקרוא אותו, רק פונקציות השרת |
 | זיהוי מיילים חדשים | `history.list` של Gmail מאז המיקום ששמרנו. בדיקה תקופתית (כל 10 דקות, pg_cron) + כפתור "בדוק עכשיו" |
 | מה נשמר | שולח, נושא, קטגוריה, סיכום (לא גוף המייל) |

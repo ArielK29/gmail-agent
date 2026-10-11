@@ -195,3 +195,25 @@ A button "סימנתי כטופל" on every item of the briefing. The member set
 | Browser (throw-away member, localhost) | 3 seeded items; pressing the button removed only that item, the database row got `handled_at`, a reload kept it hidden, no horizontal scroll; member deleted afterwards (1 user, 1 connection left) | pass |
 | Whole suite | `node --test` on all six files | 133 pass |
 Security advisors: unchanged (the known `pg_net` and leaked-password items; the four "no policy" notices are server-only tables on purpose).
+
+## Calendar and tasks in the briefing (issue #20, 2026-10-12)
+What it is: two new sections in the briefing card: "today and tomorrow in the calendar" (events of the primary calendar that have not ended) and "tasks waiting" (open tasks due from 30 days ago to 7 days ahead). Read-only, optional: the member can untick the calendar or tasks permission on Google's screen. Members who already connected see a button "add calendar and tasks" that reopens Google's consent screen.
+
+Deployed: gmail-sync v16, gmail-callback v6 (records which optional permissions were granted, wipes the rows of a permission that was not), gmail-connect v4 (asks for the two extra read-only scopes), gmail-disconnect v7 (also deletes the agenda), migration 012 (`gmail_agenda`, flags `has_calendar` / `has_tasks`). A forced scheduler run on v16 returned `{saved:0, connected:true, problems:[]}`. The consent URL the page really received contains the three scopes.
+
+| Layer | Test | Result |
+|---|---|---|
+| Parsing (`agenda.test.ts`) | cancelled, declined, working-location and duplicate events, all-day vs timed, links and bidi characters in titles, missing titles, tasks without a due day, completed/deleted/hidden tasks, caps of 30 and 50, 3000 random Google answers (every row satisfies the database rules) | pass |
+| Permission detection | 401 and "insufficient scope" mean the permission is gone; "API not enabled in the project" (even when the text also says insufficient) and rate limits do not | pass |
+| Refresh logic (real `refreshAgenda` and `syncOne`, fake Google and database) | nothing asked without the permission, at most every 10 minutes, stale rows removed, changed rows updated not duplicated, another member's rows with identical ids untouched, Google busy or unreachable keeps the saved day and never switches a permission off, a failed list changes nothing, a failed write deletes nothing, an empty calendar clears the day, a failing calendar never fails the sync | 21 tests pass |
+| Chaos | 40 random worlds: Google and the database fail at random, the clock jumps back and forward; other members are never touched; after healing the saved day equals Google's exactly | pass |
+| Mutation check | 10 deliberate breakages (cancelled kept, declined kept, completed tasks kept, API-disabled treated as missing permission, no throttle (two ways), unscoped stale delete, failed write unnoticed, failed list skipped silently, failed events treated as an empty calendar) | every one made tests fail; two needed a stronger test first (written, then caught); restored all pass |
+| Callback | exact scopes only (look-alike, wider calendar and read-write tasks scopes do not count), garbage tokens | 4 tests pass |
+| Page logic | today/tomorrow, sorted, all-day first, running event says "now", ended events gone, tasks 30 days back to 7 ahead, midnight boundary, garbage | 42 page tests pass |
+| Permissions | `supabase/tests/rls_gmail_agenda_test.sql`: own rows only, no write from the browser (insert, update, flags), delete own only, anon denied, database refuses a task without a day, a timed event without a start, an unknown kind, a 201-character title, a duplicate; deleting a member removes the rows | 18 lines, all good |
+| Browser (throw-away member, 375 px, localhost) | events and tasks render; hostile title (bidi override, `<b>` tags, a 120-letter word) is plain text, no horizontal scroll; the hint and the "add" button show for a member without tasks; the button reached Google's real sign-in page with the three scopes in the address; member deleted afterwards (1 user, 1 connection, 0 agenda rows) | pass |
+| Whole suite | `node --test` on all seven files | 160 pass, 0 fail |
+
+Bug found by these tests while building it: the chaos test first failed because the test itself forgot to install its fake Google (a test bug, fixed; the code was right).
+
+Not verified: the real Google Calendar and Tasks answers (needs the two APIs enabled in the Google Cloud project, a member who connects again with the new permissions, and the Google sign-in work of #7). Everything above uses fakes shaped like Google's documented answers.

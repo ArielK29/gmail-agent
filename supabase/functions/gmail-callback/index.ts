@@ -2,7 +2,7 @@
 // stores it (server side only) and sends the member back to the page. Deployed WITHOUT jwt verification
 // because the redirect comes from Google, not from our page; the one-time `state` identifies the member.
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { backUrl, consentOutcome } from './logic.ts';
+import { backUrl, consentOutcome, optionalScopes } from './logic.ts';
 
 function back(appUrl: string, result: string): Response {
   return new Response(null, { status: 302, headers: { Location: backUrl(appUrl, result) } });
@@ -72,6 +72,15 @@ Deno.serve(async (req: Request) => {
   if (existing?.google_email && email && existing.google_email.toLowerCase() !== email.toLowerCase()) {
     const wipe = await admin.from('gmail_digest').delete().eq('user_id', row.user_id);
     if (wipe.error) return back(appUrl, 'error'); // never mix two accounts: stop before storing the new connection
+    const wipeAgenda = await admin.from('gmail_agenda').delete().eq('user_id', row.user_id);
+    if (wipeAgenda.error) return back(appUrl, 'error');
+  }
+  // The optional permissions the member kept: what was not granted is switched off and its saved rows are removed.
+  const extra = optionalScopes(tokens);
+  for (const [granted, kind] of [[extra.calendar, 'event'], [extra.tasks, 'task']] as Array<[boolean, string]>) {
+    if (granted) continue;
+    const dropped = await admin.from('gmail_agenda').delete().eq('user_id', row.user_id).eq('kind', kind);
+    if (dropped.error) return back(appUrl, 'error');
   }
 
   const { error } = await admin.from('gmail_connections').upsert({
@@ -81,6 +90,9 @@ Deno.serve(async (req: Request) => {
     status: 'active',
     history_id: null, // start fresh: the first run looks at the last 2 days
     last_checked_at: null,
+    has_calendar: extra.calendar,
+    has_tasks: extra.tasks,
+    agenda_checked_at: null,
     connected_at: new Date().toISOString(),
   });
   return back(appUrl, error ? 'error' : 'connected');

@@ -31,7 +31,7 @@ Deno.serve(async (req: Request) => {
   if (!token) return reply(401, { error: 'not signed in' });
 
   const { data: secret } = await admin.from('agent_secrets').select('value').eq('name', 'cron').maybeSingle();
-  let query = admin.from('gmail_connections').select('user_id, refresh_token, history_id, last_checked_at, last_attempt_at, status');
+  let query = admin.from('gmail_connections').select('user_id, refresh_token, history_id, last_checked_at, last_attempt_at, status, has_calendar, has_tasks, agenda_checked_at');
   const scheduled = Boolean(secret) && token === secret!.value;
   // On-demand scan (issue #15). One function, so the code for Gmail and the model is shared with the sync.
   const body = await req.json().catch(() => ({}));

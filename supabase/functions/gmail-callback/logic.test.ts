@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { consentOutcome, backUrl, GMAIL_READONLY } from './logic.ts';
+import { consentOutcome, backUrl, GMAIL_READONLY, GOOGLE_CALENDAR, GOOGLE_TASKS, optionalScopes } from './logic.ts';
 
 test('consentOutcome: stores a connection only when Google sent a refresh token AND the Gmail permission was granted', () => {
   assert.equal(consentOutcome(true, { refresh_token: 'r', scope: `openid email ${GMAIL_READONLY}` }), 'ok');
@@ -24,4 +24,14 @@ test('backUrl: the result is always from the fixed list, the address is built co
   for (const hostile of ['<script>', 'connected&evil=1', '../../x', '', 'CONNECTED', 'https://evil.example']) {
     assert.equal(backUrl('https://x.github.io/app/', hostile), 'https://x.github.io/app/?gmail=error', 'unknown result: ' + hostile);
   }
+});
+
+test('optional permissions: only the exact calendar and tasks scopes count, whatever else is ticked', () => {
+  assert.deepEqual(optionalScopes({ scope: `${GMAIL_READONLY} ${GOOGLE_CALENDAR} ${GOOGLE_TASKS} openid` }), { calendar: true, tasks: true });
+  assert.deepEqual(optionalScopes({ scope: `${GMAIL_READONLY} ${GOOGLE_TASKS}` }), { calendar: false, tasks: true });
+  assert.deepEqual(optionalScopes({ scope: `${GMAIL_READONLY}\n${GOOGLE_CALENDAR}` }), { calendar: true, tasks: false });
+  assert.deepEqual(optionalScopes({ scope: GMAIL_READONLY }), { calendar: false, tasks: false });
+  assert.deepEqual(optionalScopes({ scope: GOOGLE_CALENDAR + 'x ' + 'https://www.googleapis.com/auth/calendar' }), { calendar: false, tasks: false }, 'look-alike and wider scopes are not the permission');
+  assert.deepEqual(optionalScopes({ scope: 'https://www.googleapis.com/auth/tasks' }), { calendar: false, tasks: false }, 'the read-write tasks scope is a different permission');
+  for (const bad of [null, undefined, {}, 'x', 5, [], { scope: 5 }, { scope: null }]) assert.deepEqual(optionalScopes(bad), { calendar: false, tasks: false });
 });

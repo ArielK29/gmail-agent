@@ -282,3 +282,85 @@ export function pickReplyCandidates(rows: any[], nowMs: number, limit: number): 
   }
   return out;
 }
+// ======================= Calendar and tasks in the briefing (issue #20): pure logic =======================
+export const MAX_EVENTS = 30;
+export const MAX_TASKS = 50;
+export const AGENDA_REFRESH_MS = 10 * 60 * 1000; // the calendar and the tasks are asked about at most every 10 minutes
+
+export interface AgendaRow {
+  kind: 'event' | 'task';
+  external_id: string;
+  title: string;
+  starts_at: string | null;
+  ends_at: string | null;
+  all_day: boolean;
+  day: string | null;
+}
+
+const NO_TITLE = '(ללא כותרת)';
+const validId = (value: unknown): value is string => typeof value === 'string' && value.length >= 1 && value.length <= 256;
+const isoOrNull = (value: unknown): string | null => {
+  if (typeof value !== 'string') return null;
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? new Date(time).toISOString() : null;
+};
+
+// Events of the primary calendar (Google answer of events.list). Cancelled events, events the member declined, and the
+// "where I work" markers are not part of the day. Titles are untrusted text: links and control characters removed, cut.
+export function parseEvents(body: unknown): AgendaRow[] {
+  const items: unknown[] = Array.isArray((body as any)?.items) ? (body as any).items : [];
+  const seen = new Set<string>();
+  const rows: AgendaRow[] = [];
+  for (const item of items as any[]) {
+    if (!item || typeof item !== 'object' || !validId(item.id) || seen.has(item.id)) continue;
+    if (item.status === 'cancelled' || item.eventType === 'workingLocation') continue;
+    const attendees: any[] = Array.isArray(item.attendees) ? item.attendees : [];
+    if (attendees.some((a) => a && a.self === true && a.responseStatus === 'declined')) continue;
+    const title = cleanText(item.summary, 200) || NO_TITLE;
+    let row: AgendaRow | null = null;
+    if (typeof item.start?.date === 'string' && isRealDay(item.start.date)) {
+      row = { kind: 'event', external_id: item.id, title, starts_at: null, ends_at: null, all_day: true, day: item.start.date };
+    } else {
+      const start = isoOrNull(item.start?.dateTime);
+      if (start) {
+        const end = isoOrNull(item.end?.dateTime);
+        row = { kind: 'event', external_id: item.id, title, starts_at: start, ends_at: end && Date.parse(end) >= Date.parse(start) ? end : null, all_day: false, day: null };
+      }
+    }
+    if (!row) continue;
+    seen.add(item.id);
+    rows.push(row);
+    if (rows.length >= MAX_EVENTS) break;
+  }
+  return rows;
+}
+
+// Open tasks (Google answer of tasks.list) that have a due day. A task without a due day is not part of a morning briefing.
+export function parseTasks(body: unknown, seenIds: Set<string> = new Set()): AgendaRow[] {
+  const items: unknown[] = Array.isArray((body as any)?.items) ? (body as any).items : [];
+  const rows: AgendaRow[] = [];
+  for (const item of items as any[]) {
+    if (seenIds.size >= MAX_TASKS) break;
+    if (!item || typeof item !== 'object' || !validId(item.id) || seenIds.has(item.id)) continue;
+    if (item.status !== 'needsAction' || item.deleted === true || item.hidden === true) continue;
+    const day = typeof item.due === 'string' ? item.due.slice(0, 10) : '';
+    if (!isRealDay(day)) continue;
+    seenIds.add(item.id);
+    rows.push({ kind: 'task', external_id: item.id, title: cleanText(item.title, 200) || NO_TITLE, starts_at: null, ends_at: null, all_day: false, day });
+  }
+  return rows;
+}
+
+// Google tells us with a 403 that the permission is missing; the same 403 also covers "the API is switched off in the project",
+// which is OUR problem and must not make the member's permission look gone.
+export function isMissingPermission(status: number, body: unknown): boolean {
+  if (status !== 403 && status !== 401) return false;
+  const text = JSON.stringify(body ?? {}).toLowerCase();
+  if (text.includes('has not been used') || text.includes('accessnotconfigured') || text.includes('service_disabled')) return false;
+  return status === 401 || text.includes('insufficient') || text.includes('scope');
+}
+
+export const shouldRefreshAgenda = (lastCheckedAt: string | null | undefined, nowMs: number): boolean => {
+  const last = lastCheckedAt ? Date.parse(lastCheckedAt) : NaN;
+  return !Number.isFinite(last) || nowMs - last >= AGENDA_REFRESH_MS || nowMs < last;
+};

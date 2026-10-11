@@ -1,6 +1,6 @@
 // Starts the "Connect Gmail" flow: returns the Google consent URL for the signed-in member.
-// Separate from sign-in on purpose: only the read-only Gmail scope is requested, with offline access
-// (a refresh token) so the agent can check for new emails in the background.
+// Separate from sign-in on purpose: only READ-ONLY scopes are requested (Gmail required; calendar and tasks optional, the member
+// can untick them on Google's screen), with offline access (a refresh token) so the agent can work in the background.
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
 const cors = {
@@ -34,7 +34,7 @@ Deno.serve(async (req: Request) => {
     client_id: clientId,
     redirect_uri: `${url}/functions/v1/gmail-callback`,
     response_type: 'code',
-    scope: 'https://www.googleapis.com/auth/gmail.readonly openid email',
+    scope: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/tasks.readonly openid email',
     access_type: 'offline',
     prompt: 'consent',
     state,

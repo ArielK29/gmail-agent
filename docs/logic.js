@@ -240,6 +240,42 @@
       newSince, empty: deadlines.length === 0 && replies.length === 0,
     };
   }
-  return { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, deadlineLabel, greeting, localDay };
+  // ---- Calendar and tasks in the briefing (issue #20) ----
+  const clock = (date) => `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  // Today's and tomorrow's events (the ones that have not ended yet) and the tasks due from 30 days ago to 7 days ahead.
+  // Rows come from the server (gmail_agenda); anything malformed is ignored.
+  function agendaBriefing(rows, now, today) {
+    const list = Array.isArray(rows) ? rows.filter((row) => row && typeof row === 'object' && !Array.isArray(row)) : [];
+    const nowDate = now instanceof Date && !Number.isNaN(now.getTime()) ? now : new Date();
+    const nowMs = nowDate.getTime();
+    const tomorrow = localDay(new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate() + 1));
+    const dayWord = (day) => (day === today ? 'היום' : 'מחר');
+
+    const events = [];
+    for (const row of list) {
+      if (row.kind !== 'event') continue;
+      if (row.all_day === true) {
+        if (isRealDay(row.day) && (row.day === today || row.day === tomorrow)) events.push({ row, sort: dayNumber(row.day) * 1440 - 1, label: `${dayWord(row.day)} · כל היום` });
+        continue;
+      }
+      const start = row.starts_at ? new Date(row.starts_at) : null;
+      if (!start || Number.isNaN(start.getTime())) continue;
+      const end = row.ends_at ? new Date(row.ends_at).getTime() : NaN;
+      if (Number.isFinite(end) ? end <= nowMs : start.getTime() < nowMs - 3600000) continue; // already over
+      const day = localDay(start);
+      if (day !== today && day !== tomorrow) continue;
+      const running = start.getTime() <= nowMs;
+      events.push({ row, sort: start.getTime() / 60000, label: running ? `עכשיו · עד ${Number.isFinite(end) ? clock(new Date(end)) : '?'}` : `${dayWord(day)} · ${clock(start)}` });
+    }
+    events.sort((a, b) => a.sort - b.sort);
+
+    const tasks = list
+      .filter((row) => row.kind === 'task' && isRealDay(row.day))
+      .map((row) => ({ row, diff: dayNumber(row.day) - dayNumber(today) }))
+      .filter((entry) => entry.diff >= -30 && entry.diff <= 7)
+      .sort((a, b) => a.diff - b.diff)
+      .map((entry) => ({ ...entry, label: deadlineLabel(entry.diff) }));
+    return { events: events.slice(0, BRIEF_MAX), eventMore: Math.max(0, events.length - BRIEF_MAX), tasks: tasks.slice(0, BRIEF_MAX), taskMore: Math.max(0, tasks.length - BRIEF_MAX), empty: events.length === 0 && tasks.length === 0 };
+  }  return { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, agendaBriefing, deadlineLabel, greeting, localDay };
 });
 

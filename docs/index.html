@@ -94,9 +94,13 @@
   <section id="briefCard" class="card hidden" aria-labelledby="briefTitle">
     <strong id="briefTitle">בוקר טוב: מה כדאי לראות עכשיו</strong>
     <div id="briefNew" class="status"></div>
+    <div id="briefEvents"></div>
+    <div id="briefTasks"></div>
     <div id="briefDeadlines"></div>
     <div id="briefReplies"></div>
     <div id="briefEmpty" class="status"></div>
+    <div id="briefAgendaHint" class="status"></div>
+    <button id="addAgenda" type="button" class="secondary hidden">הוסף יומן ומשימות (חיבור מחדש ל-Google)</button>
   </section>
 
   <section id="summaryCard" class="card hidden" aria-labelledby="summaryTitle">
@@ -154,12 +158,12 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js"></script>
-<script src="logic.js?v=20261012b"></script>
+<script src="logic.js?v=20261012c"></script>
 <script>
   // config.js defines window.APP_CONFIG = { supabaseUrl, supabaseKey } (the publishable key; never a secret key).
   const { supabaseUrl, supabaseKey } = window.APP_CONFIG;
   const logic = window.AgentLogic; // Hebrew messages and validation, tested in Node (docs/logic.test.js)
-  const LOGIC_FUNCTIONS = ['authMessage', 'validateCredentials', 'problemMessage', 'emptyStateText', 'dailySummary', 'summaryHeadline', 'urgentHeadline', 'safeText', 'morningBriefing', 'greeting', 'localDay', 'scanErrorMessage', 'parseItemsText', 'validateScanForm', 'scanProgressText', 'rollupItems', 'lastFullMonth'];
+  const LOGIC_FUNCTIONS = ['authMessage', 'validateCredentials', 'problemMessage', 'emptyStateText', 'dailySummary', 'summaryHeadline', 'urgentHeadline', 'safeText', 'morningBriefing', 'greeting', 'localDay', 'scanErrorMessage', 'parseItemsText', 'validateScanForm', 'scanProgressText', 'rollupItems', 'lastFullMonth', 'agendaBriefing'];
   if (!logic || LOGIC_FUNCTIONS.some((name) => typeof logic[name] !== 'function')) {
     // An old cached copy of logic.js: ask for a fresh page once instead of showing a broken one.
     let already = false; try { already = Boolean(sessionStorage.getItem('logicReload')); sessionStorage.setItem('logicReload', '1'); } catch { already = true; }
@@ -187,6 +191,8 @@
 
   // All text from emails is put on the page with textContent (never as HTML).
   let allRows = [];
+  let allAgenda = []; // the member's calendar events and tasks (gmail_agenda)
+  let agendaFlags = { calendar: false, tasks: false }; // which optional permissions the member gave
   let connectionState = { connected: false, expired: false };
 
   // Fill the category filter once, from the same list used for the labels.
@@ -247,8 +253,9 @@
   // Morning briefing: deadlines, mails that probably wait for my answer, what is new since my last visit (kept in this browser).
   function renderBriefing() {
     const card = $('briefCard');
-    show(card, allRows.length > 0);
-    if (allRows.length === 0) return;
+    const wantsAgenda = connectionState.connected && !connectionState.expired && !(agendaFlags.calendar && agendaFlags.tasks);
+    show(card, allRows.length > 0 || allAgenda.length > 0 || wantsAgenda);
+    if (allRows.length === 0 && allAgenda.length === 0 && !wantsAgenda) return;
     // The baseline is read ONCE per page load (the previous visit); every later redraw (a token refresh, a tab focus) keeps it,
     // so the counter does not reset itself while the page is open.
     if (visitBaseline === undefined) {
@@ -277,7 +284,28 @@
     };
     fill($('briefDeadlines'), 'מועדים קרובים', brief.deadlines, brief.deadlineMore, (n) => `ועוד ${n} מועדים ברשימה למטה.`, (entry) => `מועד אחרון: ${entry.row.due_date} (${entry.label})`);
     fill($('briefReplies'), 'ייתכן שצריך לענות', brief.replies, brief.replyMore, (n) => `ועוד ${n} מיילים שממתינים לתשובה.`, (entry) => `ממתין לתשובה שלך (${entry.label})`);
-    $('briefEmpty').textContent = brief.empty ? 'אין כרגע מועדים קרובים או מיילים שממתינים לתשובה. כל הכבוד.' : '';
+    // Calendar and tasks (their own rows, written by the server for members who ticked the permission).
+    const agenda = logic.agendaBriefing(allAgenda, now, logic.localDay(now));
+    const agendaFill = (box, title, entries, more, moreText) => {
+      box.textContent = '';
+      if (entries.length === 0) return;
+      const heading = document.createElement('div'); heading.className = 'brief-title'; heading.textContent = title; box.append(heading);
+      for (const entry of entries) {
+        const item = document.createElement('div'); item.className = 'urgent-item';
+        const head = document.createElement('div'); head.textContent = logic.safeText(entry.row.title) || '(ללא כותרת)';
+        const note = document.createElement('div'); note.className = 'action'; note.textContent = entry.label;
+        item.append(head, note); box.append(item);
+      }
+      if (more > 0) { const rest = document.createElement('div'); rest.className = 'status'; rest.textContent = moreText(more); box.append(rest); }
+    };
+    agendaFill($('briefEvents'), 'היום וגם מחר ביומן', agenda.events, agenda.eventMore, (n) => `ועוד ${n} אירועים ביומן.`);
+    agendaFill($('briefTasks'), 'משימות שמחכות', agenda.tasks, agenda.taskMore, (n) => `ועוד ${n} משימות.`);
+    const noAgenda = !agendaFlags.calendar && !agendaFlags.tasks;
+    $('briefEmpty').textContent = brief.empty && agenda.empty ? 'אין כרגע מועדים קרובים, משימות או מיילים שממתינים לתשובה. כל הכבוד.' : '';
+    $('briefAgendaHint').textContent = !wantsAgenda ? '' : noAgenda
+      ? 'היומן והמשימות שלך עדיין לא מחוברים. לחיבור לחץ למטה והשאר מסומנות את ההרשאות ליומן ולמשימות (קריאה בלבד).'
+      : agendaFlags.calendar ? 'המשימות שלך עדיין לא מחוברות. לחיבור לחץ למטה והשאר מסומנת את ההרשאה למשימות (קריאה בלבד).' : 'היומן שלך עדיין לא מחובר. לחיבור לחץ למטה והשאר מסומנת את ההרשאה ליומן (קריאה בלבד).';
+    show($('addAgenda'), wantsAgenda);
   }
   // Daily summary: the last 24 hours, computed from the saved digest (see AgentLogic.dailySummary). Plain text only.
   const DIGEST_LIMIT = 200;
@@ -435,11 +463,13 @@
   // so nothing stays in the page for the next person on a shared computer.
   function clearMemberData() {
     allRows = [];
+    allAgenda = []; agendaFlags = { calendar: false, tasks: false };
     connectionState = { connected: false, expired: false };
     for (const id of ['digest', 'summaryUrgent', 'summaryHeadline', 'summaryCategories', 'summaryNote', 'digestCount', 'connection']) $(id).textContent = '';
     $('search').value = ''; $('filterCategory').value = ''; $('filterUrgency').value = '';
     show($('summaryCard'), false); show($('scanCard'), false); show($('briefCard'), false); visitBaseline = undefined;
-    for (const id of ['briefNew', 'briefDeadlines', 'briefReplies', 'briefEmpty']) $(id).textContent = '';
+    for (const id of ['briefNew', 'briefEvents', 'briefTasks', 'briefDeadlines', 'briefReplies', 'briefEmpty', 'briefAgendaHint']) $(id).textContent = '';
+    show($('addAgenda'), false);
     driving = null; $('scanResults').textContent = ''; $('scanStatus').textContent = ''; $('scanQuery').value = ''; $('scanItems').value = ''; $('scanConsent').checked = false;
   }
 
@@ -453,12 +483,13 @@
       show($('login'), !signedIn); show($('app'), signedIn); show($('digestCard'), signedIn);
       if (!signedIn) { clearMemberData(); return; }
 
-      const connectionResult = await db.from('gmail_connections').select('google_email, last_checked_at, status').maybeSingle();
+      const connectionResult = await db.from('gmail_connections').select('google_email, last_checked_at, status, has_calendar, has_tasks').maybeSingle();
+      const agendaResult = await db.from('gmail_agenda').select('kind, external_id, title, starts_at, ends_at, all_day, day').limit(200);
       const digestResult = await db.from('gmail_digest').select('id, from_name, subject, category, summary, urgency, suggested_action, received_at, due_date, needs_reply, handled_at')
         .order('received_at', { ascending: false }).limit(DIGEST_LIMIT);
       if (mine !== refreshSeq) return;
       // A database error must never look like "not connected" or "no emails".
-      if (connectionResult.error || digestResult.error) { notify(LOAD_ERROR); show($('summaryCard'), false); show($('briefCard'), false); return; }
+      if (connectionResult.error || digestResult.error || agendaResult.error) { notify(LOAD_ERROR); show($('summaryCard'), false); show($('briefCard'), false); return; }
       if ($('notice').textContent === LOAD_ERROR) notify('');
 
       const connection = connectionResult.data;
@@ -473,6 +504,8 @@
       show($('connect'), !connected || expired); show($('check'), connected && !expired); show($('disconnect'), connected);
 
       allRows = digestResult.data || [];
+      allAgenda = agendaResult.data || [];
+      agendaFlags = { calendar: Boolean(connection && connection.has_calendar), tasks: Boolean(connection && connection.has_tasks) };
       renderBriefing();
       renderSummary();
       renderDigest();
@@ -530,6 +563,7 @@
     try { const { url } = await callFunction('gmail-connect'); window.location.href = url; }
     catch { notify('לא הצלחנו לפתוח את Google. נסה שוב.'); }
   };
+  $('addAgenda').onclick = $('connect').onclick; // the same Google consent screen, now with the calendar and tasks permissions
   $('check').onclick = async () => {
     $('check').disabled = true; notify('בודק מיילים חדשים...');
     try {

@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, deadlineLabel, greeting, localDay } = require('./logic.js');
+const { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, agendaBriefing, deadlineLabel, greeting, localDay } = require('./logic.js');
 
 test('authMessage maps the Supabase errors seen in the browser run', () => {
   assert.equal(authMessage({ message: 'Invalid login credentials' }), 'האימייל או הסיסמה שגויים.');
@@ -409,4 +409,50 @@ test('morningBriefing: 2000 random mailboxes - lists respect the rules, sizes, a
     assert.equal(a.deadlines.length + a.deadlineMore, c.deadlines.length + c.deadlineMore);
     assert.equal(a.replies.length + a.replyMore, c.replies.length + c.replyMore);
   }
+});
+
+// ---- calendar and tasks in the briefing (issue #20). Dates are built in LOCAL time, so the tests do not depend on the machine's zone.
+const L = (day, hour, minute = 0) => new Date(2026, 9, day, hour, minute); // October 2026
+const AN = L(12, 9, 30);
+const ATODAY = '2026-10-12';
+const ev = (id, start, end, over = {}) => ({ kind: 'event', external_id: id, title: 'E' + id, all_day: false, starts_at: start && start.toISOString(), ends_at: end && end.toISOString(), day: null, ...over });
+const adayEv = (id, day) => ({ kind: 'event', external_id: id, title: 'D' + id, all_day: true, starts_at: null, ends_at: null, day });
+const tk = (id, day) => ({ kind: 'task', external_id: id, title: 'T' + id, all_day: false, starts_at: null, ends_at: null, day });
+
+test('agendaBriefing: today and tomorrow, sorted by time, all-day first, labelled in Hebrew', () => {
+  const rows = [ev('late', L(12, 17), L(12, 18)), adayEv('trip', '2026-10-12'), ev('morning', L(12, 10), L(12, 11)), ev('next', L(13, 8, 5), L(13, 9)), ev('later', L(14, 9), L(14, 10)), adayEv('tomorrow-all', '2026-10-13')];
+  const b = agendaBriefing(rows, AN, ATODAY);
+  assert.deepEqual(b.events.map((e) => e.row.external_id), ['trip', 'morning', 'late', 'tomorrow-all', 'next'].sort((x, y) => ['trip', 'morning', 'late', 'tomorrow-all', 'next'].indexOf(x) - ['trip', 'morning', 'late', 'tomorrow-all', 'next'].indexOf(y)));
+  assert.deepEqual(b.events.map((e) => e.label), ['היום · כל היום', 'היום · 10:00', 'היום · 17:00', 'מחר · כל היום', 'מחר · 08:05']);
+});
+
+test('agendaBriefing: an event that already ended is gone, one that is running says "now", one without an end lasts an hour', () => {
+  const rows = [ev('over', L(12, 8), L(12, 9)), ev('running', L(12, 9), L(12, 10, 30)), ev('noend-recent', L(12, 9), null), ev('noend-old', L(12, 8), null)];
+  const b = agendaBriefing(rows, AN, ATODAY);
+  assert.deepEqual(b.events.map((e) => e.row.external_id), ['running', 'noend-recent']);
+  assert.equal(b.events[0].label, 'עכשיו · עד 10:30');
+});
+
+test('agendaBriefing: tasks from 30 days overdue to 7 days ahead, soonest first; the rest is counted', () => {
+  const rows = [tk('far', '2026-10-20'), tk('edge', '2026-10-19'), tk('today', '2026-10-12'), tk('overdue', '2026-10-10'), tk('ancient', '2026-09-11'), tk('edge-old', '2026-09-12')];
+  const b = agendaBriefing(rows, AN, ATODAY);
+  assert.deepEqual(b.tasks.map((t) => t.row.external_id), ['edge-old', 'overdue', 'today', 'edge']);
+  assert.deepEqual(b.tasks.map((t) => t.label), ['באיחור של 30 ימים', 'באיחור של יומיים'.replace('יומיים', '2 ימים'), 'היום', 'בעוד 7 ימים']);
+  const many = Array.from({ length: 9 }, (_, i) => tk('t' + i, '2026-10-13'));
+  const c = agendaBriefing(many, AN, ATODAY);
+  assert.equal(c.tasks.length, 5); assert.equal(c.taskMore, 4);
+});
+
+test('agendaBriefing: garbage never throws and gives an empty result', () => {
+  for (const rows of [null, undefined, [], [null], [{}], 'x', 5, [5, 'x', []], [{ kind: 'event', all_day: false, starts_at: 'garbage' }], [{ kind: 'event', all_day: true, day: '2026-02-30' }], [{ kind: 'task', day: 'x' }]]) {
+    const b = agendaBriefing(rows, AN, ATODAY);
+    assert.equal(b.empty, true, JSON.stringify(rows));
+  }
+  assert.doesNotThrow(() => agendaBriefing([], 'not a date', ATODAY));
+});
+
+test('agendaBriefing: a day boundary - 23:30 tonight is today, 00:10 is tomorrow', () => {
+  const rows = [ev('tonight', L(12, 23, 30), L(12, 23, 55)), ev('after-midnight', L(13, 0, 10), L(13, 1))];
+  const b = agendaBriefing(rows, AN, ATODAY);
+  assert.deepEqual(b.events.map((e) => e.label), ['היום · 23:30', 'מחר · 00:10']);
 });

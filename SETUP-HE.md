@@ -7,7 +7,7 @@
 |---|---|
 | כתובת ה-redirect (להדבקה ב-Google) | `https://ppkbuyiatkxpfeqmvwzb.supabase.co/functions/v1/gmail-callback` |
 | כתובת הדף (`APP_URL`) | `http://localhost:5174` |
-| הרשאה שמבקשים | `https://www.googleapis.com/auth/gmail.readonly` |
+| הרשאה שמבקשים | `https://www.googleapis.com/auth/gmail.readonly` (חובה), `.../auth/calendar.readonly` ו-`.../auth/tasks.readonly` (רשות). צריך להפעיל ב-Google Cloud את Google Calendar API ואת Google Tasks API |
 
 ## שלב 1 · Google Cloud
 1. היכנס ל-https://console.cloud.google.com עם חשבון ה-Gmail שלך.
@@ -18,7 +18,7 @@
 1. **APIs & Services** ← **OAuth consent screen** (או **Google Auth Platform**) ← **Get started**.
 2. App name: `סוכן Gmail` (זה המיתוג שהמשתמש רואה). User support email: המייל שלך.
 3. Audience: **External**. Contact email: המייל שלך. אשר את התנאים ← **Create**.
-4. **Data Access** ← **Add or remove scopes** ← הוסף `gmail.readonly` (וגם `openid` ו-`email`) ← Save.
+4. **Data Access** ← **Add or remove scopes** ← הוסף `gmail.readonly`, `calendar.readonly`, `tasks.readonly` (וגם `openid` ו-`email`) ← Save.
 5. **Audience** ← **Publish app** ← אשר. (מצב Production ללא אימות, כדי שהחיבור לא יפוג אחרי 7 ימים.)
 
 ## שלב 3 · אישורי OAuth
