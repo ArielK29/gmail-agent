@@ -64,3 +64,22 @@ Not exercised: a failing write to `gmail_usage` or to the position in gmail-sync
 node --test docs/logic.test.js supabase/functions/gmail-sync/logic.test.ts
 ```
 Expected: 25 of 25 pass.
+
+## Browser end-to-end run (repeatable, safe)
+Used on 2026-10-11 with Claude in Chrome and with the visible browser pane of the Claude app.
+
+**Safety rules (learned from the lesson: the agent stops before anything that costs money or writes to production):**
+1. Ask the owner before any test that spends model quota on real mail or changes the owner's real rows. Prefer the throw-away member.
+2. Type a password only on `http://localhost:5174` (local dev page of this app), never on the live site. Use a fresh random password for every run and never commit it.
+3. Always run the cleanup block and stop the local server.
+
+**Steps**
+1. `supabase/tests/e2e_seed.sql` block 1 (replace `<PASSWORD>`): creates the member, a fake connection and 3 summaries.
+2. `node dev-server.js` (port 5174). Open the page in the visible pane. Scroll to the top first (a page left scrolled down makes clicks land on the footer links).
+3. Sign in with the email and password; check the banner, 3 rows, 1 "urgent" badge, 1 suggested action.
+4. Run the scenarios (empty and wrong login, Enter key, notice messages with `?gmail=cancelled`, simulated load error, cooldown, expired access, disconnect, and the optional blocked-delete trigger).
+5. Cleanup: block 2, stop the server, block 3. Expected: `users = 1`, `connections = 1`, the owner's digest rows unchanged, no leftover trigger or function.
+
+**Tool notes:** the Chrome extension tab runs in the background (its `visibilityState` is hidden), so typing and screenshots fail there: use `form_input` and `.click()`, or use the visible pane. Return plain strings from page scripts (the tool blocks objects with secret-like field names).
+
+**Result of the verification of this procedure (2026-10-11):** seed returned member=1, identity=1, connection=1, digest_rows=3; sign-in with Enter worked; 3 rows, counter "מוצגים 3 מתוך 3", 1 urgent badge; cleanup and check returned users=1, connections=1, digest_rows=56, no leftovers.
