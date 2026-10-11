@@ -83,3 +83,10 @@ Used on 2026-10-11 with Claude in Chrome and with the visible browser pane of th
 **Tool notes:** the Chrome extension tab runs in the background (its `visibilityState` is hidden), so typing and screenshots fail there: use `form_input` and `.click()`, or use the visible pane. Return plain strings from page scripts (the tool blocks objects with secret-like field names).
 
 **Result of the verification of this procedure (2026-10-11):** seed returned member=1, identity=1, connection=1, digest_rows=3; sign-in with Enter worked; 3 rows, counter "מוצגים 3 מתוך 3", 1 urgent badge; cleanup and check returned users=1, connections=1, digest_rows=56, no leftovers.
+
+## Daily summary card (2026-10-12)
+A "סיכום יומי" card at the top of the page: how many mails arrived in the last 24 hours, the urgent ones (up to 5, newest first, with the suggested action), and a count per category. It is computed in the browser from the saved digest (`dailySummary` in `docs/logic.js`): **no model call, no new secret, no cost**. It is a card on the page, not a message that is pushed to the member (see TODO.md, "Daily summary push").
+
+- Unit tests: `node --test docs/logic.test.js supabase/functions/gmail-sync/logic.test.ts` -> **32 of 32 pass** (7 new: 24 h window, urgent list and "and N more", categories and actions, broken input, "list may be cut off" warning, Hebrew number forms, Hebrew-only guard). Checked red/green: with the window changed on purpose to 48 h, 2 tests failed; restored, all pass.
+- Browser run (throw-away member, local page): 4 seeded mails, one of them 30 hours old and urgent. The card said "3 מיילים חדשים ב-24 השעות האחרונות", "מייל דחוף אחד" (the old urgent mail was correctly left out), the suggested action, and "כספים: 1 · אישי: 1 · פרסומת: 1". Cleanup: 1 user, 1 connection, no leftover trigger.
+- Not verified: a member with more than 200 mails a day (the "may be incomplete" note is covered by the unit test only), and the card on the live site (it goes live with the push to `main`).

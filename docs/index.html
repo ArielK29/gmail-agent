@@ -37,6 +37,8 @@
     .divider { display:flex; align-items:center; gap:12px; color:var(--muted); font-size:14px; margin:16px 0 4px; }
     .divider::before, .divider::after { content:""; flex:1; height:1px; background:var(--line); }
     button.google { width:100%; display:flex; align-items:center; justify-content:center; gap:10px; background:#fff; color:#1f1f1f; }
+    .summary-line { margin: 8px 0 4px; }
+    .urgent-item { border-inline-start: 3px solid var(--pink); padding: 4px 10px; margin: 6px 0; }
     .footer { text-align:center; font-size:14px; margin-top: 16px; }
     .footer a { display:inline-block; padding:14px 10px; min-height:48px; opacity:.85; }
   </style>
@@ -75,6 +77,14 @@
       <button id="disconnect" class="secondary hidden">נתק את Gmail ומחק את הנתונים שלי</button>
       <button id="signOut" class="secondary">התנתקות</button>
     </div>
+  </section>
+
+  <section id="summaryCard" class="card hidden" aria-labelledby="summaryTitle">
+    <strong id="summaryTitle">סיכום יומי</strong>
+    <div id="summaryHeadline" class="summary-line"></div>
+    <div id="summaryUrgent"></div>
+    <div id="summaryCategories" class="status"></div>
+    <div id="summaryNote" class="status"></div>
   </section>
 
   <section id="digestCard" class="card hidden">
@@ -170,17 +180,45 @@
   }
   for (const id of ['search', 'filterCategory', 'filterUrgency']) $(id).addEventListener('input', renderDigest);
 
+  // Daily summary: the last 24 hours, computed from the saved digest (see AgentLogic.dailySummary). Plain text only.
+  const DIGEST_LIMIT = 200;
+  function renderSummary() {
+    const card = $('summaryCard');
+    show(card, allRows.length > 0);
+    if (allRows.length === 0) return;
+    const summary = logic.dailySummary(allRows, new Date(), DIGEST_LIMIT);
+    $('summaryHeadline').textContent = logic.summaryHeadline(summary.total);
+    const urgentBox = $('summaryUrgent');
+    urgentBox.textContent = '';
+    if (summary.total > 0) {
+      const title = document.createElement('div'); title.textContent = logic.urgentHeadline(summary.urgentCount);
+      urgentBox.append(title);
+      for (const row of summary.urgent) {
+        const item = document.createElement('div'); item.className = 'urgent-item';
+        const head = document.createElement('div');
+        head.textContent = `${row.from_name || 'לא ידוע'} · ${row.subject || '(ללא נושא)'}`;
+        const body = document.createElement('div'); body.className = 'subject'; body.textContent = row.summary;
+        item.append(head, body);
+        if (row.suggested_action) { const action = document.createElement('div'); action.className = 'action'; action.textContent = 'הצעה אוטומטית: ' + row.suggested_action; item.append(action); }
+        urgentBox.append(item);
+      }
+      if (summary.urgentMore > 0) { const more = document.createElement('div'); more.className = 'status'; more.textContent = `ועוד ${summary.urgentMore} דחופים ברשימה למטה.`; urgentBox.append(more); }
+    }
+    $('summaryCategories').textContent = summary.byCategory.map((entry) => `${CATEGORY_HE[entry.category] || entry.category}: ${entry.count}`).join(' · ');
+    $('summaryNote').textContent = summary.incomplete ? 'הסיכום מבוסס על 200 המיילים האחרונים, ייתכן שיש עוד.' : '';
+  }
+
   async function refresh() {
     const { data: session } = await db.auth.getSession();
     const signedIn = Boolean(session.session);
     show($('login'), !signedIn); show($('app'), signedIn); show($('digestCard'), signedIn);
-    if (!signedIn) return;
+    if (!signedIn) { show($('summaryCard'), false); return; }
 
     const connectionResult = await db.from('gmail_connections').select('google_email, last_checked_at, status').maybeSingle();
     const digestResult = await db.from('gmail_digest').select('from_name, subject, category, summary, urgency, suggested_action, received_at')
       .order('received_at', { ascending: false }).limit(200);
     // A database error must never look like "not connected" or "no emails".
-    if (connectionResult.error || digestResult.error) { notify(LOAD_ERROR); return; }
+    if (connectionResult.error || digestResult.error) { notify(LOAD_ERROR); show($('summaryCard'), false); return; }
 
     const connection = connectionResult.data;
     const connected = Boolean(connection);
@@ -194,6 +232,7 @@
     show($('connect'), !connected || expired); show($('check'), connected && !expired); show($('disconnect'), connected);
 
     allRows = digestResult.data || [];
+    renderSummary();
     renderDigest();
   }
 

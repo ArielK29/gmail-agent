@@ -1,4 +1,4 @@
-﻿// Pure UI decisions of the Gmail agent page. Loaded by index.html (window.AgentLogic) and tested with `node --test`.
+// Pure UI decisions of the Gmail agent page. Loaded by index.html (window.AgentLogic) and tested with `node --test`.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.AgentLogic = factory();
@@ -50,6 +50,54 @@
     return 'עוד אין מיילים. לחץ "בדוק מיילים חדשים עכשיו".';
   }
 
-  return { authMessage, validateCredentials, problemMessage, emptyStateText };
+  // ---- Daily summary: what happened in the last 24 hours, computed from the saved digest (no model call). ----
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const MAX_URGENT_SHOWN = 5;
+
+  function dailySummary(rows, now, loadedLimit) {
+    const list = Array.isArray(rows) ? rows : [];
+    const nowMs = (now instanceof Date ? now : new Date()).getTime();
+    const received = (row) => (row && row.received_at ? new Date(row.received_at).getTime() : NaN);
+    const inWindow = list
+      .filter((row) => Number.isFinite(received(row)) && nowMs - received(row) < DAY_MS)
+      .sort((a, b) => received(b) - received(a));
+
+    const urgentAll = inWindow.filter((row) => row.urgency === 'high');
+    const counts = new Map();
+    for (const row of inWindow) counts.set(row.category || 'other', (counts.get(row.category || 'other') || 0) + 1);
+    const byCategory = [...counts.entries()]
+      .map(([category, count]) => ({ category, count }))
+      .sort((a, b) => b.count - a.count || a.category.localeCompare(b.category));
+
+    // The page loads only the newest `loadedLimit` rows. If that page is full and still has no row older than a day,
+    // there may be more mails inside the window than we can see.
+    const limit = Number.isFinite(loadedLimit) ? loadedLimit : Infinity;
+    const reachesOlder = list.some((row) => Number.isFinite(received(row)) && nowMs - received(row) >= DAY_MS);
+    const incomplete = list.length >= limit && !reachesOlder;
+
+    return {
+      total: inWindow.length,
+      urgentCount: urgentAll.length,
+      urgent: urgentAll.slice(0, MAX_URGENT_SHOWN),
+      urgentMore: Math.max(0, urgentAll.length - MAX_URGENT_SHOWN),
+      actionCount: inWindow.filter((row) => typeof row.suggested_action === 'string' && row.suggested_action.trim()).length,
+      byCategory,
+      incomplete,
+    };
+  }
+
+  function summaryHeadline(total) {
+    if (total <= 0) return 'אין מיילים חדשים ב-24 השעות האחרונות.';
+    if (total === 1) return 'מייל אחד חדש ב-24 השעות האחרונות.';
+    return `${total} מיילים חדשים ב-24 השעות האחרונות.`;
+  }
+
+  function urgentHeadline(count) {
+    if (count <= 0) return 'אין מיילים דחופים.';
+    if (count === 1) return 'מייל דחוף אחד:';
+    return `${count} מיילים דחופים:`;
+  }
+
+  return { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline };
 });
 
