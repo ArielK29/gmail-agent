@@ -150,7 +150,7 @@
       const summary = document.createElement('div'); summary.className = 'summary'; summary.textContent = row.summary;
       item.append(subject, summary);
       if (row.suggested_action) {
-        const action = document.createElement('div'); action.className = 'action'; action.textContent = 'מה לעשות: ' + row.suggested_action;
+        const action = document.createElement('div'); action.className = 'action'; action.textContent = 'הצעה אוטומטית: ' + row.suggested_action;
         item.append(action);
       }
       box.append(item);
@@ -164,12 +164,15 @@
     show($('login'), !signedIn); show($('app'), signedIn); show($('digestCard'), signedIn);
     if (!signedIn) return;
 
-    const { data: connection } = await db.from('gmail_connections').select('google_email, last_checked_at').maybeSingle();
+    const { data: connection } = await db.from('gmail_connections').select('google_email, last_checked_at, status').maybeSingle();
     const connected = Boolean(connection);
-    $('connection').textContent = connected
-      ? `מחובר: ${connection.google_email || 'Gmail'}${connection.last_checked_at ? ' · נבדק לאחרונה ' + new Date(connection.last_checked_at).toLocaleString('he-IL') : ''}`
-      : 'Gmail עדיין לא מחובר.';
-    show($('connect'), !connected); show($('check'), connected); show($('disconnect'), connected);
+    const expired = connected && connection.status === 'needs_reconnect';
+    $('connection').textContent = expired
+      ? 'החיבור ל-Gmail פג (Google ביטלה את ההרשאה, או שעברו 7 ימים בגרסת הבדיקה). לחץ "חבר את Gmail" כדי לחבר מחדש.'
+      : connected
+        ? `מחובר: ${connection.google_email || 'Gmail'}${connection.last_checked_at ? ' · נבדק לאחרונה ' + new Date(connection.last_checked_at).toLocaleString('he-IL') : ''}`
+        : 'Gmail עדיין לא מחובר.';
+    show($('connect'), !connected || expired); show($('check'), connected && !expired); show($('disconnect'), connected);
 
     const { data: rows } = await db.from('gmail_digest').select('from_name, subject, category, summary, urgency, suggested_action, received_at')
       .order('received_at', { ascending: false }).limit(200);
@@ -218,6 +221,9 @@
       const result = await callFunction('gmail-sync');
       if (result.problems && result.problems.length > 0) {
         $('status').textContent = 'הבדיקה נכשלה: ' + result.problems.join(' | ');
+      } else if (result.needsReconnect) {
+        $('status').textContent = 'החיבור פג. לחץ "חבר את Gmail" כדי לחבר מחדש.';
+        await refresh();
       } else if (result.throttled) {
         $('status').textContent = 'בדקת לפני רגע. נסה שוב בעוד כמה שניות.';
       } else {

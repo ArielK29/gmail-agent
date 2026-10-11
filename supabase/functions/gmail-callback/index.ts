@@ -49,10 +49,17 @@ Deno.serve(async (req: Request) => {
     email = null;
   }
 
+  // Connecting a DIFFERENT Google account: the summaries of the old account must not stay mixed with the new one.
+  const { data: existing } = await admin.from('gmail_connections').select('google_email').eq('user_id', row.user_id).maybeSingle();
+  if (existing?.google_email && email && existing.google_email.toLowerCase() !== email.toLowerCase()) {
+    await admin.from('gmail_digest').delete().eq('user_id', row.user_id);
+  }
+
   const { error } = await admin.from('gmail_connections').upsert({
     user_id: row.user_id,
     google_email: email,
     refresh_token: tokens.refresh_token,
+    status: 'active',
     history_id: null, // start fresh: the first run looks at the last 2 days
     last_checked_at: null,
     connected_at: new Date().toISOString(),
