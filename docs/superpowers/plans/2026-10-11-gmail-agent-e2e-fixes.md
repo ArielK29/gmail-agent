@@ -1,4 +1,4 @@
-# Gmail Agent: Fixes From the Browser End-to-End Run Implementation Plan
+﻿# Gmail Agent: Fixes From the Browser End-to-End Run Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -329,11 +329,16 @@ select (select count(*) from auth.users) as users, (select count(*) from public.
 
 ## Relationship to the other open work
 
-- **One domain unblocks four things:** DuoFit #86 (SMTP sending domain), DuoFit #12 (privacy-policy URL for the stores, Vercel custom domain), Google OAuth verification (verified home page and privacy page) and the Google sign-in branding. Plan the domain purchase once for all of them.
-- **DuoFit #11 (bug bash):** reuse this run's checklist on the DuoFit web build with a throw-away DuoFit member: raw English errors (DuoFit already has `lib/authErrors.ts`, reuse that mapping as the model for Task 1), silent false success on write calls (16 write calls in `lib/remote*.ts` and `hooks/useAuth.ts` to inspect), 48 px targets, 375 px layout, dead buttons. The part that needs a real iPhone stays in #11.
-- **DuoFit #12:** the privacy page of the Gmail agent is the template for the store privacy-policy page.
-- **Gmail agent owner steps (Task 5 of the previous plan):** Google provider secret, customers' addresses, paid Gemini decision. The privacy page already tells customers about the free tier.
+Issues of this plan (repo `ArielK29/gmail-agent`): [#1](https://github.com/ArielK29/gmail-agent/issues/1) Task 1, [#2](https://github.com/ArielK29/gmail-agent/issues/2) Task 2, [#3](https://github.com/ArielK29/gmail-agent/issues/3) Task 3, [#4](https://github.com/ArielK29/gmail-agent/issues/4) Task 4, [#5](https://github.com/ArielK29/gmail-agent/issues/5) Task 5, [#6](https://github.com/ArielK29/gmail-agent/issues/6) Task 6.
 
+| Open issue (repo `ArielK29/DuoFit`) | How it is connected to this plan |
+|---|---|
+| [#86](https://github.com/ArielK29/DuoFit/issues/86) Custom SMTP (needs a domain) | The sign-up flow (account creation and confirmation e-mail) of the Gmail agent could not be exercised and depends on it (Task 5, known gap). The same domain also serves the points below, so buy it once. |
+| [#12](https://github.com/ArielK29/DuoFit/issues/12) Release readiness | Needs a public privacy-policy URL: the agent's `privacy.html` is the template. The "no silent failure in write paths" check of Task 3 is also a release check. The custom domain of Vercel and the Google OAuth verification (home page and privacy page on a verified domain) need the same domain as #86. |
+| [#11](https://github.com/ArielK29/DuoFit/issues/11) Cross-device, RTL and dark-mode bug bash | Reuse Task 6's browser run on the DuoFit web build with a throw-away DuoFit member: raw English errors (DuoFit already has `lib/authErrors.ts`, the model for Task 1), silent false success in the 16 write calls of `lib/remote*.ts` and `hooks/useAuth.ts`, 48 px targets, 375 px layout, dead buttons. The part that needs a real iPhone stays in #11. |
+| [#25](https://github.com/ArielK29/DuoFit/issues/25) PostHog Session Replay | Not connected (needs a Development Build). Listed so nobody looks for a link. |
+
+Owner steps still open from the previous plan (Google provider secret in Supabase, customers' addresses for Audience, paid Gemini decision) are not in this plan; the privacy page already warns customers about the free tier.
 ## Self-Review
 
 **Spec coverage:** findings 1 (English errors), 2 (not a form), 3 (empty-state text), 4 (English server messages), 5 (message hidden when signed out), 6 (48 px links), 7 (silent writes and ignored load errors) each map to Tasks 1, 2, 3 and 4; the known gaps are Task 5; repeatability and the safety rule are Task 6. No finding is left without a task.
@@ -343,3 +348,4 @@ select (select count(*) from auth.users) as users, (select count(*) from public.
 **Type consistency:** `authMessage`, `validateCredentials`, `problemMessage`, `emptyStateText` have the same names and signatures in the tests, the module and the page wiring. The seed uses the same fixed throw-away id and e-mail as the cleanup block.
 
 **Review Focus:** 1 and 5 are covered by Task 1/4 tests and the Task 3 trigger test; 2 and 3 by the Task 2 browser checks; 4 by Task 2 Step 5 (verified by temporarily revoking `select` on `gmail_digest` for `authenticated` in a throw-away transaction is not possible through the page, so it is verified by reading the code path and recorded as such in `docs/TESTING.md`).
+
