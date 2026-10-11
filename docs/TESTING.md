@@ -217,3 +217,24 @@ Deployed: gmail-sync v16, gmail-callback v6 (records which optional permissions 
 Bug found by these tests while building it: the chaos test first failed because the test itself forgot to install its fake Google (a test bug, fixed; the code was right).
 
 Google Cloud (project gmail-agent): the Calendar API and the Tasks API are enabled and both scopes are saved in Data Access. Not verified: the real Google Calendar and Tasks answers (needs a member who connects again with the new permissions: the "add calendar and tasks" button). Everything above uses fakes shaped like Google's documented answers.
+
+## Morning briefing by e-mail (issue #14, 2026-10-12)
+What it is: a switch on the page, "send me the briefing by e-mail every morning". When it is on, the scheduled run sends ONE mail per local day, between 07:00 and 12:00 in the member's own time zone (taken from the browser, checked on the server), only if the briefing has something in it, and only to the member's own connected Google address. The mail has the same four lists as the page. Sending uses Resend (secret `RESEND_API_KEY`, optional `EMAIL_FROM`); without the secret nothing is sent and nothing is counted as a failure.
+
+Deployed: gmail-sync v17 (`briefing.ts`, `digest.ts`, scheduled run calls `sendDigests` at the end), migrations 013 (switch and bookkeeping columns, the member may write only `digest_email` and `digest_tz`) and 014 (switching off and on resets the failure counter, done by the database). A forced scheduler run on v17 returned `{saved:0, connected:true, problems:[], digests:{sent:0, empty:0, failed:0, notConfigured:0}}`.
+
+| Layer | Test | Result |
+|---|---|---|
+| Time zones and window | invalid or hostile zone names become the default; local day and hour across the date line and the Israeli clock change (23:30 UTC on 24.10 is 01:30 local); window 07:00 to 11:59 | pass |
+| Same lists as the page | 400 random worlds: the mail's deadlines, replies, events and tasks equal the page's (`docs/logic.js`) in the machine's zone | pass |
+| The message | empty briefing sends nothing; subject has numbers only (no mail text, no line break); script tags, attribute tricks, bidi characters, `&amp;` tricks and 400-letter words are escaped or cut; 2000 random garbage worlds never throw | pass |
+| Delivery (`digest.test.ts`, real `sendDigests`, fake database and sender) | once per local day, again the next day; three overlapping runs send once; empty day stays claimed; not configured gives the day back and counts nothing; temporary failure gives the day back, permanent refusals count and stop after three, a success resets; only opted-in, alive members in their own morning; each mail goes to its owner; a failing read or a crash never leaves a day claimed without a mail | pass |
+| Real sender function | without a key it never calls out; with a key the request has one recipient, an idempotency key per member and day, 4xx is permanent, 429/5xx/network are temporary | pass |
+| Chaos | 40 random worlds, 4 members in different zones, random failures, overlapping runs, a jumping clock: never two mails for the same member and day, never to a stranger, after healing everyone opted in gets exactly one | pass |
+| Mutation check | 12 deliberate breakages (no claim condition, claim result ignored, day not given back when not configured, permanent failures not counted, wrong recipient, empty day given back, no end of the morning window, failure cap removed, escaping removed, address check removed, member zone ignored, handled mails mentioned) | every one made tests fail; restored all pass |
+| Permissions | `rls_gmail_digest_email_test.sql` (16 lines) and `rls_gmail_digest_email_trigger_test.sql` (3 lines): own row only; no write to the token, the recipient address, the last-sent day, the failure counter, status or flags; a bad or 65-character zone is refused by the database; no insert or delete; anon denied; the reset trigger works and cannot be called directly | all good |
+| Browser (throw-away member, localhost) | the switch appears for a connected member, ticking it saved `digest_email` and the browser's zone, reset a failure counter of 3 to 0, survived a reload, no horizontal scroll; member deleted afterwards | pass |
+
+Bugs found by these tests while building it: the supabase-js query builder has no `.catch`, so a cleanup written with `.catch()` would have thrown inside the error path (fixed with try/catch); the briefing builder threw on a NaN clock (now falls back to the real time); two of my own test expectations were wrong (the clock-change hour, and mails too old in the healing phase).
+
+Not verified: a real e-mail leaving through Resend. That needs a Resend account and its API key set as the Supabase secret `RESEND_API_KEY` (owner), and for customers other than the owner a verified sending domain (#88).

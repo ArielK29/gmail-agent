@@ -83,6 +83,10 @@
 
   <section id="app" class="card hidden">
     <div id="connection" class="status"></div>
+    <div id="digestEmailBox" class="hidden">
+      <label class="check"><input type="checkbox" id="digestEmail"> שלח לי את הבריפינג למייל כל בוקר</label>
+      <div id="digestEmailStatus" class="status"></div>
+    </div>
     <div class="row">
       <button id="connect">חבר את Gmail</button>
       <button id="check" class="secondary hidden">בדוק מיילים חדשים עכשיו</button>
@@ -248,6 +252,32 @@
     row.handled_at = stamp;
     renderBriefing();
   }
+
+  // The e-mail briefing switch. The member writes only digest_email and digest_tz (the database allows nothing else); the
+  // server sends the mail to the member's own Google address between 07:00 and 12:00 in this time zone, only if there is something to show.
+  let digestUser = null;
+  function renderDigestEmail(connection) {
+    show($('digestEmailBox'), Boolean(connection));
+    digestUser = connection ? connection.user_id : null;
+    if (!connection) { $('digestEmail').checked = false; $('digestEmailStatus').textContent = ''; return; }
+    $('digestEmail').checked = connection.digest_email === true;
+    $('digestEmailStatus').textContent = connection.digest_email !== true ? ''
+      : (connection.digest_failures || 0) >= 3 ? 'השליחה נעצרה אחרי כמה כשלונות. בטל את הסימון וסמן שוב כדי לנסות מחדש.'
+      : `יישלח לכתובת ${connection.google_email || 'Gmail שלך'} בין 07:00 ל-12:00, ורק אם יש מה להראות.${connection.digest_last_sent_on ? ' נשלח לאחרונה: ' + connection.digest_last_sent_on + '.' : ''}`;
+  }
+  $('digestEmail').addEventListener('change', async () => {
+    const box = $('digestEmail');
+    const wanted = box.checked;
+    if (!digestUser) { box.checked = !wanted; return; }
+    box.disabled = true;
+    let zone = 'Asia/Jerusalem';
+    try { zone = Intl.DateTimeFormat().resolvedOptions().timeZone || zone; } catch { /* the default zone */ }
+    const { data, error } = await db.from('gmail_connections').update({ digest_email: wanted, digest_tz: zone }).eq('user_id', digestUser).select('user_id');
+    box.disabled = false;
+    if (error || !data || data.length !== 1) { box.checked = !wanted; notify('לא הצלחנו לשמור את ההגדרה. נסה שוב.'); return; }
+    notify('');
+    refresh();
+  });
 
   let visitBaseline; // undefined until the first draw of this page load
   // Morning briefing: deadlines, mails that probably wait for my answer, what is new since my last visit (kept in this browser).
@@ -464,6 +494,7 @@
   function clearMemberData() {
     allRows = [];
     allAgenda = []; agendaFlags = { calendar: false, tasks: false };
+    renderDigestEmail(null);
     connectionState = { connected: false, expired: false };
     for (const id of ['digest', 'summaryUrgent', 'summaryHeadline', 'summaryCategories', 'summaryNote', 'digestCount', 'connection']) $(id).textContent = '';
     $('search').value = ''; $('filterCategory').value = ''; $('filterUrgency').value = '';
@@ -483,7 +514,7 @@
       show($('login'), !signedIn); show($('app'), signedIn); show($('digestCard'), signedIn);
       if (!signedIn) { clearMemberData(); return; }
 
-      const connectionResult = await db.from('gmail_connections').select('google_email, last_checked_at, status, has_calendar, has_tasks').maybeSingle();
+      const connectionResult = await db.from('gmail_connections').select('user_id, google_email, last_checked_at, status, has_calendar, has_tasks, digest_email, digest_last_sent_on, digest_failures').maybeSingle();
       const agendaResult = await db.from('gmail_agenda').select('kind, external_id, title, starts_at, ends_at, all_day, day').limit(200);
       const digestResult = await db.from('gmail_digest').select('id, from_name, subject, category, summary, urgency, suggested_action, received_at, due_date, needs_reply, handled_at')
         .order('received_at', { ascending: false }).limit(DIGEST_LIMIT);
@@ -502,6 +533,7 @@
           ? `מחובר: ${connection.google_email || 'Gmail'}${connection.last_checked_at ? ' · נבדק לאחרונה ' + new Date(connection.last_checked_at).toLocaleString('he-IL') : ''}`
           : 'Gmail עדיין לא מחובר.';
       show($('connect'), !connected || expired); show($('check'), connected && !expired); show($('disconnect'), connected);
+      renderDigestEmail(connected && !expired ? connection : null);
 
       allRows = digestResult.data || [];
       allAgenda = agendaResult.data || [];

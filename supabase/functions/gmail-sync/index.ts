@@ -7,6 +7,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 import { syncOne, type Connection } from './sync.ts';
 import { isThrottled } from './logic.ts';
 import { cancelScan, startScan, stepScan, tickScans } from './scan.ts';
+import { sendDigests, type DigestRun } from './digest.ts';
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -97,5 +98,10 @@ Deno.serve(async (req: Request) => {
       }
     }
   }
-  return reply(200, { saved, connected: true, problems });
+  // The morning e-mail (only the scheduled run sends it; a failure here never changes the sync result).
+  let digests: DigestRun | undefined;
+  if (scheduled && Date.now() - startedAt < 50_000) {
+    try { digests = await sendDigests(admin, Date.now()); } catch { problems.push('digest e-mail failed'); }
+  }
+  return reply(200, { saved, connected: true, problems, ...(digests ? { digests } : {}) });
 });
