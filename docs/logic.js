@@ -186,6 +186,58 @@
     const fmt = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
     return { from: fmt(first), to: fmt(last) };
   }
-  return { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth };
+  // ---- Morning briefing (issue #16) ----
+  const BRIEF_MAX = 5;
+  const localDay = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+
+  function greeting(now) {
+    if (!(now instanceof Date) || Number.isNaN(now.getTime())) return 'שלום';
+    const hour = now.getHours();
+    if (hour >= 5 && hour < 12) return 'בוקר טוב';
+    if (hour >= 12 && hour < 17) return 'צהריים טובים';
+    if (hour >= 17 && hour < 21) return 'ערב טוב';
+    return 'לילה טוב';
+  }
+
+  function deadlineLabel(diff) {
+    if (diff === 0) return 'היום';
+    if (diff === 1) return 'מחר';
+    if (diff > 1) return `בעוד ${diff} ימים`;
+    if (diff === -1) return 'באיחור של יום';
+    return `באיחור של ${-diff} ימים`;
+  }
+
+  function replyAgeLabel(hours) {
+    const days = Math.floor(hours / 24);
+    return days < 1 ? 'לפני כמה שעות' : days === 1 ? 'לפני יום' : `לפני ${days} ימים`;
+  }
+
+  // What to look at first, computed from the saved mails: deadlines (30 days overdue to 7 days ahead), mails that probably
+  // wait for my answer (flagged by the server, at least 12 hours old, within 14 days) and what is new since my last visit.
+  function morningBriefing(rows, now, lastVisitMs, today) {
+    const list = Array.isArray(rows) ? rows.filter((row) => row && typeof row === 'object' && !Array.isArray(row)) : [];
+    const nowMs = now instanceof Date ? now.getTime() : Date.now();
+    const received = (row) => (row.received_at ? new Date(row.received_at).getTime() : NaN);
+
+    const deadlines = list
+      .filter((row) => isRealDay(row.due_date))
+      .map((row) => ({ row, diff: dayNumber(row.due_date) - dayNumber(today) }))
+      .filter((entry) => entry.diff >= -30 && entry.diff <= 7)
+      .sort((a, b) => a.diff - b.diff || received(b.row) - received(a.row))
+      .map((entry) => ({ ...entry, label: deadlineLabel(entry.diff) }));
+
+    const replies = list
+      .filter((row) => row.needs_reply === true && Number.isFinite(received(row)) && nowMs - received(row) >= 12 * 3600 * 1000 && nowMs - received(row) <= 14 * 24 * 3600 * 1000)
+      .sort((a, b) => received(a) - received(b))
+      .map((row) => ({ row, label: replyAgeLabel((nowMs - received(row)) / 3600000) }));
+
+    const newSince = Number.isFinite(lastVisitMs) ? list.filter((row) => Number.isFinite(received(row)) && received(row) > lastVisitMs).length : null;
+    return {
+      deadlines: deadlines.slice(0, BRIEF_MAX), deadlineMore: Math.max(0, deadlines.length - BRIEF_MAX),
+      replies: replies.slice(0, BRIEF_MAX), replyMore: Math.max(0, replies.length - BRIEF_MAX),
+      newSince, empty: deadlines.length === 0 && replies.length === 0,
+    };
+  }
+  return { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, deadlineLabel, greeting, localDay };
 });
 

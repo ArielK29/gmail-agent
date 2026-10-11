@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth } = require('./logic.js');
+const { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, deadlineLabel, greeting, localDay } = require('./logic.js');
 
 test('authMessage maps the Supabase errors seen in the browser run', () => {
   assert.equal(authMessage({ message: 'Invalid login credentials' }), 'האימייל או הסיסמה שגויים.');
@@ -291,4 +291,107 @@ test('lastFullMonth: the previous calendar month, in every kind of month', () =>
   assert.deepEqual(lastFullMonth(new Date(2026, 0, 5)), { from: '2025-12-01', to: '2025-12-31' }, 'January looks back into December of the previous year');
   assert.deepEqual(lastFullMonth(new Date(2028, 2, 1)), { from: '2028-02-01', to: '2028-02-29' }, 'leap February');
   assert.deepEqual(lastFullMonth(new Date(2026, 2, 31)), { from: '2026-02-01', to: '2026-02-28' });
+});
+// ---- Morning briefing (issue #16): what the page decides ----
+const BNOW = new Date('2026-10-12T09:00:00Z');
+const bAgo = (hours) => new Date(BNOW.getTime() - hours * 3600 * 1000).toISOString();
+const brow = (over) => ({ from_name: 'Dana', subject: 's', summary: 'x', category: 'work', urgency: 'normal', received_at: bAgo(30), due_date: null, needs_reply: null, ...over });
+
+test('deadlineLabel: Hebrew wording for overdue, today, tomorrow and later', () => {
+  assert.equal(deadlineLabel(0), 'היום');
+  assert.equal(deadlineLabel(1), 'מחר');
+  assert.equal(deadlineLabel(5), 'בעוד 5 ימים');
+  assert.equal(deadlineLabel(-1), 'באיחור של יום');
+  assert.equal(deadlineLabel(-12), 'באיחור של 12 ימים');
+  for (const n of [-40, -1, 0, 1, 2, 7, 30]) assert.doesNotMatch(deadlineLabel(n), /[A-Za-z]/);
+});
+
+test('greeting follows the hour', () => {
+  const at = (h) => greeting(new Date(2026, 9, 12, h, 0, 0));
+  assert.equal(at(7), 'בוקר טוב'); assert.equal(at(13), 'צהריים טובים'); assert.equal(at(18), 'ערב טוב'); assert.equal(at(23), 'לילה טוב'); assert.equal(at(2), 'לילה טוב');
+  assert.equal(greeting(null), 'שלום');
+});
+
+test('localDay is the member\'s own calendar day', () => {
+  assert.equal(localDay(new Date(2026, 0, 5, 23, 59)), '2026-01-05');
+  assert.equal(localDay(new Date(2028, 1, 29, 0, 1)), '2028-02-29');
+});
+
+test('morningBriefing: deadlines from 30 days overdue to 7 days ahead, soonest first, overdue labelled', () => {
+  const today = '2026-10-12';
+  const rows = [
+    brow({ subject: 'in 7', due_date: '2026-10-19' }), brow({ subject: 'in 8', due_date: '2026-10-20' }),
+    brow({ subject: 'today', due_date: '2026-10-12' }), brow({ subject: 'tomorrow', due_date: '2026-10-13' }),
+    brow({ subject: 'late 1', due_date: '2026-10-11' }), brow({ subject: 'late 30', due_date: '2026-09-12' }), brow({ subject: 'late 31', due_date: '2026-09-11' }),
+    brow({ subject: 'no date' }), brow({ subject: 'bad date', due_date: '2026-02-30' }),
+  ];
+  const b = morningBriefing(rows, BNOW, null, today);
+  assert.deepEqual(b.deadlines.map((d) => d.row.subject), ['late 30', 'late 1', 'today', 'tomorrow', 'in 7']);
+  assert.deepEqual(b.deadlines.map((d) => d.label), ['באיחור של 30 ימים', 'באיחור של יום', 'היום', 'מחר', 'בעוד 7 ימים']);
+  assert.equal(b.empty, false);
+});
+
+test('morningBriefing: at most 5 of each list, and it says how many more', () => {
+  const today = '2026-10-12';
+  const rows = [];
+  for (let i = 0; i < 9; i++) rows.push(brow({ subject: 'd' + i, due_date: `2026-10-${String(12 + (i % 7)).padStart(2, '0')}`, needs_reply: true, received_at: bAgo(20 + i) }));
+  const b = morningBriefing(rows, BNOW, null, today);
+  assert.equal(b.deadlines.length, 5); assert.equal(b.deadlineMore, 4);
+  assert.equal(b.replies.length, 5); assert.equal(b.replyMore, 4);
+});
+
+test('morningBriefing: "waiting for my answer" = flagged true, at least 12 hours old, within 14 days, oldest first', () => {
+  const rows = [
+    brow({ subject: 'fresh', needs_reply: true, received_at: bAgo(11) }),
+    brow({ subject: 'half a day', needs_reply: true, received_at: bAgo(12) }),
+    brow({ subject: 'two days', needs_reply: true, received_at: bAgo(50) }),
+    brow({ subject: 'two weeks', needs_reply: true, received_at: bAgo(24 * 14) }),
+    brow({ subject: 'too old', needs_reply: true, received_at: bAgo(24 * 14 + 1) }),
+    brow({ subject: 'answered', needs_reply: false, received_at: bAgo(60) }),
+    brow({ subject: 'unknown', needs_reply: null, received_at: bAgo(60) }),
+    brow({ subject: 'text true', needs_reply: 'true', received_at: bAgo(60) }),
+    brow({ subject: 'bad date', needs_reply: true, received_at: 'garbage' }),
+  ];
+  const b = morningBriefing(rows, BNOW, null, '2026-10-12');
+  assert.deepEqual(b.replies.map((r) => r.row.subject), ['two weeks', 'two days', 'half a day']);
+  assert.deepEqual(b.replies.map((r) => r.label), ['לפני 14 ימים', 'לפני 2 ימים', 'לפני כמה שעות']);
+});
+
+test('morningBriefing: "new since my last visit" counts mails after that moment; unknown when there was no visit', () => {
+  const rows = [brow({ received_at: bAgo(1) }), brow({ received_at: bAgo(5) }), brow({ received_at: bAgo(50) }), brow({ received_at: 'garbage' })];
+  assert.equal(morningBriefing(rows, BNOW, BNOW.getTime() - 6 * 3600 * 1000, '2026-10-12').newSince, 2);
+  assert.equal(morningBriefing(rows, BNOW, BNOW.getTime(), '2026-10-12').newSince, 0);
+  assert.equal(morningBriefing(rows, BNOW, null, '2026-10-12').newSince, null);
+  assert.equal(morningBriefing(rows, BNOW, NaN, '2026-10-12').newSince, null);
+});
+
+test('morningBriefing: empty and garbage input give an empty briefing, never an exception', () => {
+  for (const rows of [null, undefined, [], [null], [{}], 'x', 5, [5, 'x', []]]) {
+    const b = morningBriefing(rows, BNOW, null, '2026-10-12');
+    assert.equal(b.empty, true); assert.deepEqual(b.deadlines, []); assert.deepEqual(b.replies, []);
+  }
+});
+
+test('morningBriefing: 2000 random mailboxes - lists respect the rules, sizes, and order; the order of the rows does not matter', () => {
+  const next = rng(88); const today = '2026-10-12';
+  const pick = (list) => list[Math.floor(next() * list.length)];
+  for (let n = 0; n < 2000; n++) {
+    const rows = Array.from({ length: Math.floor(next() * 40) }, () => pick([
+      () => brow({ due_date: pick([null, '2026-10-05', '2026-10-12', '2026-10-15', '2026-10-25', '2026-02-30', 'x', '2026-09-01']), needs_reply: pick([true, false, null, 'true']), received_at: pick([bAgo(1), bAgo(13), bAgo(100), bAgo(24 * 20), 'bad']) }),
+      () => pick([null, 5, {}]),
+    ])());
+    const b = morningBriefing(rows, BNOW, pick([null, BNOW.getTime() - 3600000, BNOW.getTime() - 86400000 * 3]), today);
+    assert.ok(b.deadlines.length <= 5 && b.replies.length <= 5);
+    assert.ok(b.deadlineMore >= 0 && b.replyMore >= 0);
+    for (const d of b.deadlines) assert.ok(d.diff >= -30 && d.diff <= 7);
+    for (let i = 1; i < b.deadlines.length; i++) assert.ok(b.deadlines[i - 1].diff <= b.deadlines[i].diff);
+    for (const r of b.replies) assert.strictEqual(r.row.needs_reply, true);
+    for (let i = 1; i < b.replies.length; i++) assert.ok(Date.parse(b.replies[i - 1].row.received_at) <= Date.parse(b.replies[i].row.received_at));
+    assert.equal(b.empty, b.deadlines.length === 0 && b.replies.length === 0);
+    const valid = rows.filter((r) => r && typeof r === 'object');
+    const shuffled = valid.map((r) => [next(), r]).sort((x, y) => x[0] - y[0]).map((x) => x[1]);
+    const c = morningBriefing(shuffled, BNOW, null, today); const a = morningBriefing(valid, BNOW, null, today);
+    assert.equal(a.deadlines.length + a.deadlineMore, c.deadlines.length + c.deadlineMore);
+    assert.equal(a.replies.length + a.replyMore, c.replies.length + c.replyMore);
+  }
 });

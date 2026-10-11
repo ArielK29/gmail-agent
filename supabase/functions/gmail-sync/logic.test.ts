@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanText, decodeBytes, parseModelAnswer, isRetryable, backoffMs, remainingBudget, utcDay, callWithRetry, planBatch, classifyTokenResponse, isThrottled, maxHistoryId, stripControls, CATEGORIES, URGENCIES, validateScanRequest, sanitizeQuery, parseItems, buildGmailQuery, parseMatchAnswer, localMatches, MAX_SCAN_MAILS } from './logic.ts';
+import { cleanText, decodeBytes, parseModelAnswer, isRetryable, backoffMs, remainingBudget, utcDay, callWithRetry, planBatch, classifyTokenResponse, isThrottled, maxHistoryId, stripControls, CATEGORIES, URGENCIES, validateScanRequest, sanitizeQuery, parseItems, buildGmailQuery, parseMatchAnswer, localMatches, MAX_SCAN_MAILS, parseDeadline, isAutomatedSender, threadNeedsReply, pickReplyCandidates } from './logic.ts';
 
 test('cleanText removes links and cuts the length', () => {
   assert.equal(cleanText('לחץ https://evil.example/x עכשיו', 100), 'לחץ עכשיו');
@@ -26,7 +26,7 @@ test('parseModelAnswer validates every field', () => {
   ]);
   const result = parseModelAnswer(`noise ${answer} noise`, new Set(['a', 'b']));
   assert.equal(result.size, 2);
-  assert.deepEqual(result.get('a'), { category: 'work', summary: 'סיכום', urgency: 'high', action: 'ענה' });
+  assert.deepEqual(result.get('a'), { category: 'work', summary: 'סיכום', urgency: 'high', action: 'ענה', deadline: null });
   assert.equal(result.get('b')?.category, 'other');
   assert.equal(result.has('zzz'), false);
 });
@@ -395,6 +395,125 @@ test('validateScanRequest: 3000 random bodies never throw; every accepted reques
       assert.ok(queryText.length <= 200 && !/[(){}]/.test(queryText)); assert.doesNotMatch(queryText, FORBIDDEN);
       assert.ok(items.length <= 100 && new Set(items.map((s) => s.toLowerCase())).size === items.length);
       assert.ok(queryText !== '' || items.length > 0, 'something to search for');
+    }
+  }
+});
+// ======================= Morning briefing (issue #16): pure logic =======================
+test('parseDeadline accepts only a real day inside the window (60 days back, 400 ahead)', () => {
+  const today = '2026-10-12';
+  assert.equal(parseDeadline('2026-10-20', today), '2026-10-20');
+  assert.equal(parseDeadline('  2026-10-20  ', today), '2026-10-20');
+  assert.equal(parseDeadline('2026-10-12', today), '2026-10-12', 'today');
+  assert.equal(parseDeadline('2026-08-13', today), '2026-08-13', 'exactly 60 days back');
+  assert.equal(parseDeadline('2026-08-12', today), null, '61 days back');
+  assert.equal(parseDeadline('2027-11-16', today), '2027-11-16', 'exactly 400 days ahead');
+  assert.equal(parseDeadline('2027-11-17', today), null, '401 days ahead');
+  for (const bad of ['2026-02-30', '2026-13-01', '1900-01-01', '9999-12-31', 'tomorrow', '12/10/2026', '2026-10-1', '', '   ', null, undefined, 5, {}, [], '2026-10-20T10:00:00Z', '2026-10-20 '.repeat(2)]) {
+    assert.equal(parseDeadline(bad as any, today), null, JSON.stringify(bad));
+  }
+  assert.equal(parseDeadline('2028-02-29', '2028-02-01'), '2028-02-29', 'leap day');
+  assert.equal(parseDeadline('2027-02-29', '2027-02-01'), null, 'no leap day in 2027');
+});
+
+test('parseDeadline: 3000 random values never throw and never return anything outside the window', () => {
+  const next = rng(17); const today = '2026-10-12';
+  const pieces = ['2026', '-', '10', '12', '02', '30', '99', '2027', '00', ' ', 'x', '2028-02-29', '1999'];
+  for (let n = 0; n < 3000; n++) {
+    const text = Array.from({ length: Math.floor(next() * 8) }, () => pieces[Math.floor(next() * pieces.length)]).join('');
+    const out = parseDeadline(text, today);
+    if (out !== null) {
+      assert.match(out, /^\d{4}-\d{2}-\d{2}$/);
+      const diff = (Date.parse(out + 'T00:00:00Z') - Date.parse(today + 'T00:00:00Z')) / 86400000;
+      assert.ok(diff >= -60 && diff <= 400, text);
+    }
+  }
+});
+
+test('parseModelAnswer carries a valid deadline and drops an invented one', () => {
+  const known = new Set(['a', 'b', 'c']);
+  const answer = JSON.stringify([
+    { id: 'a', summary: 'חשבונית', deadline: '2026-10-20' },
+    { id: 'b', summary: 'ישיבה', deadline: '2026-02-30' },
+    { id: 'c', summary: 'בלי', deadline: '' },
+  ]);
+  const result = parseModelAnswer(answer, known, '2026-10-12');
+  assert.equal(result.get('a')!.deadline, '2026-10-20');
+  assert.equal(result.get('b')!.deadline, null);
+  assert.equal(result.get('c')!.deadline, null);
+  assert.equal(parseModelAnswer(JSON.stringify([{ id: 'a', summary: 'x' }]), known, '2026-10-12').get('a')!.deadline, null, 'a model that does not send the field');
+});
+
+test('isAutomatedSender recognises robots but not people', () => {
+  for (const robot of ['noreply@x.com', 'No-Reply <no-reply@bank.example>', 'Shop <donotreply@shop.example>', 'do-not-reply@x.io', 'notifications@github.com', 'MAILER-DAEMON@x', 'Weekly Newsletter <hi@x.com>', 'bounce+123@mail.example.com', 'postmaster@x']) assert.equal(isAutomatedSender(robot), true, robot);
+  for (const person of ['Dana Levi <dana@example.com>', 'דנה לוי <dana@gmail.com>', 'Bob <bob@company.example>', '', 'replying@example.com']) assert.equal(isAutomatedSender(person), false, person);
+  assert.equal(isAutomatedSender(null as any), false);
+});
+
+test('threadNeedsReply: the last real message decides, judged by the SENT label (aliases work); drafts, trash and spam are ignored', () => {
+  const msg = (date: number, labels: string[]) => ({ internalDate: String(date), labelIds: labels });
+  assert.equal(threadNeedsReply([msg(1, ['INBOX'])]), true, 'a lone mail from someone else');
+  assert.equal(threadNeedsReply([msg(1, ['INBOX']), msg(2, ['SENT'])]), false, 'I answered last');
+  assert.equal(threadNeedsReply([msg(1, ['SENT']), msg(2, ['INBOX'])]), true, 'they answered my mail');
+  assert.equal(threadNeedsReply([msg(1, ['INBOX']), msg(2, ['SENT']), msg(3, ['DRAFT', 'SENT'])]), false, 'a draft of mine does not count as a newer message');
+  assert.equal(threadNeedsReply([msg(1, ['INBOX']), msg(2, ['INBOX', 'SPAM'])]), true, 'spam is ignored');
+  assert.equal(threadNeedsReply([msg(2, ['SENT']), msg(1, ['INBOX'])]), false, 'order of the array does not matter, dates do');
+  assert.equal(threadNeedsReply([msg(1, ['INBOX']), { labelIds: ['SENT'] }]), false, 'a missing date: array order');
+  assert.equal(threadNeedsReply([msg(1, ['TRASH'])]), null, 'nothing real left: cannot tell');
+  for (const garbage of [null, undefined, 5, 'x', {}, [], [null], [5], [{}]]) assert.ok([true, false, null].includes(threadNeedsReply(garbage as any) as any));
+  assert.equal(threadNeedsReply([{}]), true, 'no labels at all is not "sent by me"');
+});
+
+test('threadNeedsReply: 3000 random threads never throw; the answer follows the newest valid message', () => {
+  const next = rng(29); const labels = ['INBOX', 'SENT', 'DRAFT', 'TRASH', 'SPAM', 'UNREAD', 'IMPORTANT'];
+  for (let n = 0; n < 3000; n++) {
+    const messages = Array.from({ length: Math.floor(next() * 7) }, (_, i) => ({ internalDate: next() < 0.1 ? 'bad' : String(Math.floor(next() * 1000)), labelIds: Array.from({ length: Math.floor(next() * 3) }, () => labels[Math.floor(next() * labels.length)]) }));
+    const out = threadNeedsReply(messages as any);
+    const real = messages.filter((m) => !m.labelIds.some((l) => l === 'DRAFT' || l === 'TRASH' || l === 'SPAM'));
+    if (real.length === 0) assert.equal(out, null);
+    else assert.equal(typeof out, 'boolean');
+    const valid = real.filter((m) => Number.isFinite(Number(m.internalDate)));
+    if (valid.length === real.length && real.length > 0) {
+      const newest = real.reduce((a, b) => (Number(b.internalDate) >= Number(a.internalDate) ? b : a));
+      assert.equal(out, !newest.labelIds.includes('SENT'));
+    }
+  }
+});
+
+test('pickReplyCandidates: only recent, human, reply-worthy, not-just-checked threads; newest first; unique; limited', () => {
+  const now = Date.parse('2026-10-12T09:00:00Z'); const ago = (h: number) => new Date(now - h * 3600_000).toISOString();
+  const row = (over: Record<string, unknown>) => ({ thread_id: 't', received_at: ago(30), category: 'work', urgency: 'normal', from_name: 'Dana <d@x.com>', reply_checked_at: null, ...over });
+  const rows = [
+    row({ thread_id: 'ok1', received_at: ago(30) }),
+    row({ thread_id: 'ok2', received_at: ago(50), category: 'finance' }),
+    row({ thread_id: 'old', received_at: ago(24 * 15) }),
+    row({ thread_id: 'news', category: 'newsletter' }),
+    row({ thread_id: 'promo', category: 'promotion' }),
+    row({ thread_id: 'low', urgency: 'low' }),
+    row({ thread_id: 'robot', from_name: 'noreply@x.com' }),
+    row({ thread_id: 'fresh', reply_checked_at: ago(2) }),
+    row({ thread_id: 'stale', reply_checked_at: ago(7) }),
+    row({ thread_id: null }),
+    row({ thread_id: '' }),
+    row({ thread_id: 'ok1', received_at: ago(31) }),
+    row({ thread_id: 'bad date', received_at: 'garbage' }),
+  ];
+  assert.deepEqual(pickReplyCandidates(rows as any, now, 20), ['ok1', 'stale', 'ok2']);
+  assert.deepEqual(pickReplyCandidates(rows as any, now, 2), ['ok1', 'stale']);
+  assert.deepEqual(pickReplyCandidates(null as any, now, 20), []);
+  assert.deepEqual(pickReplyCandidates([], now, 20), []);
+});
+
+test('pickReplyCandidates: 2000 random mailboxes - never more than the limit, unique, every pick satisfies the rules', () => {
+  const next = rng(77); const now = Date.parse('2026-10-12T09:00:00Z');
+  const cats = [...CATEGORIES, 'weird', null]; const froms = ['Dana <d@x.com>', 'noreply@x.com', '', null, 'Shop Newsletter <n@x.com>'];
+  for (let n = 0; n < 2000; n++) {
+    const rows = Array.from({ length: Math.floor(next() * 60) }, (_, i) => ({ thread_id: next() < 0.1 ? null : 't' + Math.floor(next() * 25), received_at: next() < 0.1 ? 'bad' : new Date(now - next() * 20 * 86400000).toISOString(), category: cats[Math.floor(next() * cats.length)], urgency: ['high', 'normal', 'low', null][Math.floor(next() * 4)], from_name: froms[Math.floor(next() * froms.length)], reply_checked_at: next() < 0.5 ? null : new Date(now - next() * 10 * 3600000).toISOString() }));
+    const limit = Math.floor(next() * 30);
+    const picks = pickReplyCandidates(rows as any, now, limit);
+    assert.ok(picks.length <= limit); assert.equal(new Set(picks).size, picks.length);
+    for (const id of picks) {
+      const matching = rows.filter((r) => r.thread_id === id);
+      assert.ok(matching.some((r) => ['personal', 'work', 'finance', 'important'].includes(r.category as string) && r.urgency !== 'low' && !isAutomatedSender(r.from_name as any) && now - Date.parse(r.received_at) <= 14 * 86400000), 'pick ' + id);
     }
   }
 });

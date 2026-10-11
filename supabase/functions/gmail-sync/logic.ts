@@ -7,6 +7,7 @@ export interface Classified {
   summary: string;
   urgency: string;
   action: string;
+  deadline: string | null; // a real day (YYYY-MM-DD) the mail asks the owner to act by, or null
 }
 
 // The model's words come from untrusted email text: links are removed and the length is cut.
@@ -34,7 +35,7 @@ export function decodeBytes(bytes: Uint8Array, contentType: string): string {
 
 // Reads the model's JSON answer. Anything that is not valid becomes "missing", never an exception:
 // the caller gives missing emails a fallback row so a bad answer cannot block a run.
-export function parseModelAnswer(text: string, knownIds: Set<string>): Map<string, Classified> {
+export function parseModelAnswer(text: string, knownIds: Set<string>, today: string = utcDay(new Date())): Map<string, Classified> {
   const result = new Map<string, Classified>();
   const start = text.indexOf('[');
   const end = text.lastIndexOf(']');
@@ -54,6 +55,7 @@ export function parseModelAnswer(text: string, knownIds: Set<string>): Map<strin
       summary,
       urgency,
       action: cleanText(item.action, 200),
+      deadline: parseDeadline(item.deadline, today),
     });
   }
   return result;
@@ -218,4 +220,65 @@ export function localMatches(text: string, items: string[]): number[] {
     if (needle.length >= 3 && haystack.includes(needle)) found.push(index);
   });
   return found;
+}
+// ======================= Morning briefing (issue #16): pure logic =======================
+// A deadline the model reports is only believed when it is a real calendar day between 60 days ago and 400 days ahead.
+export function parseDeadline(value: unknown, today: string): string | null {
+  if (typeof value !== 'string') return null;
+  const day = value.trim();
+  if (!isRealDay(day)) return null;
+  const diff = dayNumber(day) - dayNumber(today);
+  return diff >= -60 && diff <= 400 ? day : null;
+}
+
+// Robots never wait for an answer: no-reply addresses, notification senders, newsletters, bounce messages.
+const AUTOMATED_SENDER = /(no[-_.]?reply|do[-_.]?not[-_.]?reply|mailer-daemon|postmaster|bounce|notification|newsletter)/i;
+export function isAutomatedSender(from: unknown): boolean {
+  return typeof from === 'string' && AUTOMATED_SENDER.test(from);
+}
+
+// Who wrote last in a thread? Only the SENT label says "me" (it is right even when I answered from an alias). Drafts, trash
+// and spam are not real messages. null = nothing real to judge.
+export function threadNeedsReply(messages: unknown): boolean | null {
+  if (!Array.isArray(messages)) return null;
+  const real = messages.filter((m) => m && typeof m === 'object' && !(Array.isArray((m as any).labelIds) ? (m as any).labelIds : []).some((label: string) => label === 'DRAFT' || label === 'TRASH' || label === 'SPAM'));
+  if (real.length === 0) return null;
+  const key = (m: any) => (Number.isFinite(Number(m.internalDate)) && m.internalDate !== undefined && m.internalDate !== null && m.internalDate !== '' ? Number(m.internalDate) : Infinity);
+  const newest = real.reduce((best: any, m: any) => (key(m) >= key(best) ? m : best));
+  const labels: string[] = Array.isArray(newest.labelIds) ? newest.labelIds : [];
+  return !labels.includes('SENT');
+}
+
+const REPLY_CATEGORIES = ['personal', 'work', 'finance', 'important'];
+const REPLY_WINDOW_MS = 14 * 24 * 3600 * 1000;
+const REPLY_RECHECK_MS = 6 * 3600 * 1000;
+
+// A saved mail can be flagged as "waiting for my answer" only when it is reply-worthy by itself: written by a person, in a
+// category that needs answers, and not marked urgent-low.
+export function isReplyWorthy(row: any): boolean {
+  return Boolean(row) && typeof row.thread_id === 'string' && row.thread_id !== '' && REPLY_CATEGORIES.includes(row.category) && row.urgency !== 'low' && !isAutomatedSender(row.from_name);
+}
+
+// Which threads are worth asking Gmail about: recent, written by a person, reply-worthy, not urgent-low, not checked in the
+// last 6 hours. Newest first, each thread once, at most `limit`.
+export function pickReplyCandidates(rows: any[], nowMs: number, limit: number): string[] {
+  if (!Array.isArray(rows) || !(limit > 0)) return [];
+  const seen = new Set<string>();
+  const picks = rows
+    .filter(isReplyWorthy)
+    .map((row) => ({ row, received: Date.parse(row.received_at) }))
+    .filter(({ row, received }) => {
+      if (!Number.isFinite(received) || nowMs - received > REPLY_WINDOW_MS) return false;
+      const checked = row.reply_checked_at ? Date.parse(row.reply_checked_at) : NaN;
+      return !Number.isFinite(checked) || nowMs - checked >= REPLY_RECHECK_MS;
+    })
+    .sort((a, b) => b.received - a.received);
+  const out: string[] = [];
+  for (const { row } of picks) {
+    if (seen.has(row.thread_id)) continue;
+    seen.add(row.thread_id);
+    out.push(row.thread_id);
+    if (out.length >= limit) break;
+  }
+  return out;
 }

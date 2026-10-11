@@ -48,6 +48,7 @@
     .found { color: var(--accent); font-weight:600; }
     .notfound { color: var(--muted); }
     details summary { cursor:pointer; min-height:48px; display:flex; align-items:center; }
+    .brief-title { font-weight:600; margin:12px 0 4px; }
     .summary-line { margin: 8px 0 4px; }
     .urgent-item { border-inline-start: 3px solid var(--pink); padding: 4px 10px; margin: 6px 0; }
     .footer { text-align:center; font-size:14px; margin-top: 16px; }
@@ -88,6 +89,14 @@
       <button id="disconnect" class="secondary hidden">נתק את Gmail ומחק את הנתונים שלי</button>
       <button id="signOut" class="secondary">התנתקות</button>
     </div>
+  </section>
+
+  <section id="briefCard" class="card hidden" aria-labelledby="briefTitle">
+    <strong id="briefTitle">בוקר טוב: מה כדאי לראות עכשיו</strong>
+    <div id="briefNew" class="status"></div>
+    <div id="briefDeadlines"></div>
+    <div id="briefReplies"></div>
+    <div id="briefEmpty" class="status"></div>
   </section>
 
   <section id="summaryCard" class="card hidden" aria-labelledby="summaryTitle">
@@ -150,7 +159,7 @@
   // config.js defines window.APP_CONFIG = { supabaseUrl, supabaseKey } (the publishable key; never a secret key).
   const { supabaseUrl, supabaseKey } = window.APP_CONFIG;
   const logic = window.AgentLogic; // Hebrew messages and validation, tested in Node (docs/logic.test.js)
-  const LOGIC_FUNCTIONS = ['authMessage', 'validateCredentials', 'problemMessage', 'emptyStateText', 'dailySummary', 'summaryHeadline', 'urgentHeadline', 'safeText', 'scanErrorMessage', 'parseItemsText', 'validateScanForm', 'scanProgressText', 'rollupItems', 'lastFullMonth'];
+  const LOGIC_FUNCTIONS = ['authMessage', 'validateCredentials', 'problemMessage', 'emptyStateText', 'dailySummary', 'summaryHeadline', 'urgentHeadline', 'safeText', 'morningBriefing', 'greeting', 'localDay', 'scanErrorMessage', 'parseItemsText', 'validateScanForm', 'scanProgressText', 'rollupItems', 'lastFullMonth'];
   if (!logic || LOGIC_FUNCTIONS.some((name) => typeof logic[name] !== 'function')) {
     // An old cached copy of logic.js: ask for a fresh page once instead of showing a broken one.
     let already = false; try { already = Boolean(sessionStorage.getItem('logicReload')); sessionStorage.setItem('logicReload', '1'); } catch { already = true; }
@@ -222,6 +231,40 @@
   }
   for (const id of ['search', 'filterCategory', 'filterUrgency']) $(id).addEventListener('input', renderDigest);
 
+  let visitBaseline; // undefined until the first draw of this page load
+  // Morning briefing: deadlines, mails that probably wait for my answer, what is new since my last visit (kept in this browser).
+  function renderBriefing() {
+    const card = $('briefCard');
+    show(card, allRows.length > 0);
+    if (allRows.length === 0) return;
+    // The baseline is read ONCE per page load (the previous visit); every later redraw (a token refresh, a tab focus) keeps it,
+    // so the counter does not reset itself while the page is open.
+    if (visitBaseline === undefined) {
+      try { const saved = localStorage.getItem('lastVisitMs'); visitBaseline = saved ? Number(saved) : null; } catch { visitBaseline = null; }
+      try { localStorage.setItem('lastVisitMs', String(Date.now())); } catch { /* the page works without it */ }
+    }
+    const lastVisit = visitBaseline;
+    const now = new Date();
+    const brief = logic.morningBriefing(allRows, now, lastVisit, logic.localDay(now));
+    $('briefTitle').textContent = `${logic.greeting(now)}: מה כדאי לראות עכשיו`;
+    $('briefNew').textContent = brief.newSince ? (brief.newSince === 1 ? 'מייל חדש אחד מאז הביקור האחרון.' : `${brief.newSince} מיילים חדשים מאז הביקור האחרון.`) : '';
+    const fill = (box, title, entries, more, moreText, extra) => {
+      box.textContent = '';
+      if (entries.length === 0) return;
+      const heading = document.createElement('div'); heading.className = 'brief-title'; heading.textContent = title; box.append(heading);
+      for (const entry of entries) {
+        const item = document.createElement('div'); item.className = 'urgent-item';
+        const head = document.createElement('div'); head.textContent = `${logic.safeText(entry.row.from_name) || 'לא ידוע'} · ${logic.safeText(entry.row.subject) || '(ללא נושא)'}`;
+        const note = document.createElement('div'); note.className = 'action'; note.textContent = extra(entry);
+        const sum = document.createElement('div'); sum.className = 'subject'; sum.textContent = logic.safeText(entry.row.summary);
+        item.append(head, note, sum); box.append(item);
+      }
+      if (more > 0) { const rest = document.createElement('div'); rest.className = 'status'; rest.textContent = moreText(more); box.append(rest); }
+    };
+    fill($('briefDeadlines'), 'מועדים קרובים', brief.deadlines, brief.deadlineMore, (n) => `ועוד ${n} מועדים ברשימה למטה.`, (entry) => `מועד אחרון: ${entry.row.due_date} (${entry.label})`);
+    fill($('briefReplies'), 'ייתכן שצריך לענות', brief.replies, brief.replyMore, (n) => `ועוד ${n} מיילים שממתינים לתשובה.`, (entry) => `ממתין לתשובה שלך (${entry.label})`);
+    $('briefEmpty').textContent = brief.empty ? 'אין כרגע מועדים קרובים או מיילים שממתינים לתשובה. כל הכבוד.' : '';
+  }
   // Daily summary: the last 24 hours, computed from the saved digest (see AgentLogic.dailySummary). Plain text only.
   const DIGEST_LIMIT = 200;
   function renderSummary() {
@@ -381,7 +424,8 @@
     connectionState = { connected: false, expired: false };
     for (const id of ['digest', 'summaryUrgent', 'summaryHeadline', 'summaryCategories', 'summaryNote', 'digestCount', 'connection']) $(id).textContent = '';
     $('search').value = ''; $('filterCategory').value = ''; $('filterUrgency').value = '';
-    show($('summaryCard'), false); show($('scanCard'), false);
+    show($('summaryCard'), false); show($('scanCard'), false); show($('briefCard'), false); visitBaseline = undefined;
+    for (const id of ['briefNew', 'briefDeadlines', 'briefReplies', 'briefEmpty']) $(id).textContent = '';
     driving = null; $('scanResults').textContent = ''; $('scanStatus').textContent = ''; $('scanQuery').value = ''; $('scanItems').value = ''; $('scanConsent').checked = false;
   }
 
@@ -396,11 +440,11 @@
       if (!signedIn) { clearMemberData(); return; }
 
       const connectionResult = await db.from('gmail_connections').select('google_email, last_checked_at, status').maybeSingle();
-      const digestResult = await db.from('gmail_digest').select('from_name, subject, category, summary, urgency, suggested_action, received_at')
+      const digestResult = await db.from('gmail_digest').select('from_name, subject, category, summary, urgency, suggested_action, received_at, due_date, needs_reply')
         .order('received_at', { ascending: false }).limit(DIGEST_LIMIT);
       if (mine !== refreshSeq) return;
       // A database error must never look like "not connected" or "no emails".
-      if (connectionResult.error || digestResult.error) { notify(LOAD_ERROR); show($('summaryCard'), false); return; }
+      if (connectionResult.error || digestResult.error) { notify(LOAD_ERROR); show($('summaryCard'), false); show($('briefCard'), false); return; }
       if ($('notice').textContent === LOAD_ERROR) notify('');
 
       const connection = connectionResult.data;
@@ -415,6 +459,7 @@
       show($('connect'), !connected || expired); show($('check'), connected && !expired); show($('disconnect'), connected);
 
       allRows = digestResult.data || [];
+      renderBriefing();
       renderSummary();
       renderDigest();
       show($('scanCard'), connected && !expired);

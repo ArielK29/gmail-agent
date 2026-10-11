@@ -166,3 +166,21 @@ Deployed: gmail-sync v14 (scan actions `scan_start`, `scan_step`, `scan_cancel`,
 Bugs found by these tests while building it (all fixed before deploy): a cancel that arrives while a slice is running was overwritten by that slice and reported as "done"; two starts at the same moment could create two scans (now a unique index plus the normal answer); the counter was a count instead of a prefix of the slice, so a busy mail in the middle could be skipped when other mails of the slice were already saved.
 
 Not covered: the real Gmail search syntax for unusual queries, the real Gemini matching quality, and the real Google consent screen (needs #7).
+
+## Morning briefing (issue #16, 2026-10-12)
+What it is: a card at the top of the page: greeting, how many mails are new since the last visit, "upcoming deadlines" (a date the mail asks the owner to act by, from 30 days ago to 7 days ahead) and "maybe needs an answer" (a mail from a person, in a category that needs answers, whose thread has no later message of mine for at least 12 hours, within 14 days). Plan: `docs/superpowers/plans/2026-10-12-morning-briefing.md`.
+
+Deployed: gmail-sync v15 (the model also returns a deadline; after each sync up to 20 recent threads are asked about with `format=metadata`, headers and labels only), migration 010 (`thread_id`, `due_date`, `needs_reply`, `reply_checked_at`, two partial indexes). A forced scheduler run on the deployed version returned `{saved:0, connected:true, problems:[]}`.
+
+| Layer | Test | Result |
+|---|---|---|
+| Pure logic (`logic.test.ts`) | deadline accepted only as a real day within -60..+400 days, robot senders, who wrote last in a thread (drafts, trash, spam ignored, missing date, alias answers via the SENT label), reply-worthy rules, candidate picking (window, 6 h recheck, unique threads, limit 0) | all pass |
+| Reply check (`reply.test.ts`) | flag set / cleared by the thread, deadline saved from the model, a failing thread API never changes the sync result, 404 clears the flag, a newsletter in the same thread is not flagged, 40 chaos worlds | 9 tests pass |
+| Page logic (`docs/logic.test.js`) | briefing lists (ranges, order, max 5 with "and N more"), greeting by hour, local day, since-last-visit | all pass |
+| Mutation check | 7 deliberate breakages (reply logic inverted, deadline range removed, 6 h recheck removed, duplicate threads allowed, robots allowed, flag applied to every mail of the user, a busy thread treated as answered) | every one made tests fail; restored all pass |
+| Whole suite | `node --test` on all six test files | 132 pass, 0 fail |
+| Browser (throw-away member, 375 px) | briefing with seeded rows incl. hostile text and bidi characters: plain text, no horizontal scroll; empty state; sign-out wipes the card | pass |
+
+Bugs found by these tests while building it (all fixed before deploy): `pickReplyCandidates` with limit 0 returned a thread; a "waiting for answer" flag of one thread was also applied to mails in it that are not reply-worthy; the cleaned text could end with a space after the length cut.
+
+Not covered: the real quality of the model's deadline guess on real mails, the real Gmail thread answers, and delivery as a push message (issue #14, needs a channel). Marking an item "done" is not built.
