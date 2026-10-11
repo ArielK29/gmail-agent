@@ -38,3 +38,10 @@ begin; set local role authenticated;
 select set_config('request.jwt.claims', json_build_object('sub', '<REAL_USER_ID>', 'role', 'authenticated')::text, true);
 insert into public.gmail_digest (user_id, gmail_message_id, category, summary) values ('<REAL_USER_ID>', 'fake', 'other', 'x');
 rollback;
+
+-- 7. the daily usage table is service-role only. Expected: ERROR 42501 permission denied for table gmail_usage (as anon and as a member)
+begin; set local role anon; select * from public.gmail_usage; rollback;
+begin; set local role authenticated;
+select set_config('request.jwt.claims', json_build_object('sub', '<REAL_USER_ID>', 'role', 'authenticated')::text, true);
+select * from public.gmail_usage;
+rollback;

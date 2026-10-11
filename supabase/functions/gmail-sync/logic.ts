@@ -51,3 +51,11 @@ export function parseModelAnswer(text: string, knownIds: Set<string>): Map<strin
   }
   return result;
 }
+
+// Rate limits (429) and server errors (5xx) of the model are temporary: retry with growing pauses.
+export const isRetryable = (status: number): boolean => status === 429 || (status >= 500 && status <= 599);
+export const backoffMs = (attempt: number): number => Math.min(8000, 500 * 2 ** attempt);
+
+// Daily budget per member: how many emails may still be summarized today (the day is the UTC date).
+export const remainingBudget = (used: number, cap: number): number => Math.max(0, cap - used);
+export const utcDay = (date: Date): string => date.toISOString().slice(0, 10);

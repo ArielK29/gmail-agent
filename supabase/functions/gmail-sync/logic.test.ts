@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanText, decodeBytes, parseModelAnswer } from './logic.ts';
+import { cleanText, decodeBytes, parseModelAnswer, isRetryable, backoffMs, remainingBudget, utcDay } from './logic.ts';
 
 test('cleanText removes links and cuts the length', () => {
   assert.equal(cleanText('לחץ https://evil.example/x עכשיו', 100), 'לחץ עכשיו');
@@ -34,4 +34,28 @@ test('parseModelAnswer validates every field', () => {
 test('parseModelAnswer returns an empty map for broken JSON', () => {
   assert.equal(parseModelAnswer('[{"id": "a"', new Set(['a'])).size, 0);
   assert.equal(parseModelAnswer('no json at all', new Set(['a'])).size, 0);
+});
+
+test('isRetryable only for rate limits and server errors', () => {
+  assert.equal(isRetryable(429), true);
+  assert.equal(isRetryable(503), true);
+  assert.equal(isRetryable(400), false);
+  assert.equal(isRetryable(401), false);
+  assert.equal(isRetryable(200), false);
+});
+
+test('backoffMs doubles and is capped at 8 seconds', () => {
+  assert.deepEqual([0, 1, 2, 3, 4, 5].map(backoffMs), [500, 1000, 2000, 4000, 8000, 8000]);
+});
+
+test('remainingBudget never goes below zero', () => {
+  assert.equal(remainingBudget(0, 300), 300);
+  assert.equal(remainingBudget(250, 300), 50);
+  assert.equal(remainingBudget(300, 300), 0);
+  assert.equal(remainingBudget(999, 300), 0);
+});
+
+test('utcDay uses the UTC date, so midnight UTC starts a new row', () => {
+  assert.equal(utcDay(new Date('2026-10-11T23:59:59Z')), '2026-10-11');
+  assert.equal(utcDay(new Date('2026-10-12T00:00:01Z')), '2026-10-12');
 });

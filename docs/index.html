@@ -64,7 +64,7 @@
     <div class="row">
       <button id="connect">חבר את Gmail</button>
       <button id="check" class="secondary hidden">בדוק מיילים חדשים עכשיו</button>
-      <button id="disconnect" class="secondary hidden">נתק את Gmail</button>
+      <button id="disconnect" class="secondary hidden">נתק את Gmail ומחק את הנתונים שלי</button>
       <button id="signOut" class="secondary">התנתקות</button>
     </div>
     <div id="status" class="status"></div>
@@ -234,7 +234,7 @@
     $('check').disabled = false;
   };
   $('disconnect').onclick = async () => {
-    if (!confirm('לנתק את Gmail ולמחוק את הסיכומים השמורים?')) return;
+    if (!confirm('לנתק את Gmail ולמחוק את כל הסיכומים השמורים שלך? אי אפשר לשחזר.')) return;
     try {
       const result = await callFunction('gmail-disconnect');
       await refresh();
