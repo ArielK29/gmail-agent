@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline } = require('./logic.js');
+const { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText } = require('./logic.js');
 
 test('authMessage maps the Supabase errors seen in the browser run', () => {
   assert.equal(authMessage({ message: 'Invalid login credentials' }), 'האימייל או הסיסמה שגויים.');
@@ -123,4 +123,92 @@ test('summary headlines are Hebrew only', () => {
   for (const text of [summaryHeadline(0), summaryHeadline(1), summaryHeadline(5), urgentHeadline(0), urgentHeadline(1), urgentHeadline(9)]) {
     assert.doesNotMatch(text, /[A-Za-z]/);
   }
+});
+// ---- Professional-grade checks: attacker text, properties over thousands of random inputs, time edges ----
+// A tiny seeded random generator: the "random" runs are the same every time, so a failure can be reproduced.
+function rng(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+const FORBIDDEN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200D\u2060\u202A-\u202E\u2066-\u2069\uFEFF]/;
+
+test('safeText removes text-reordering and invisible characters but keeps real text', () => {
+  assert.equal(safeText('invoice\u202Efdp.exe'), 'invoicefdp.exe', 'right-to-left override');
+  assert.equal(safeText('a\u2066b\u2069c\u202Ad\u202Ce'), 'abcde', 'isolates and embeddings');
+  assert.equal(safeText('pay\u200Bpal\u200D.com\uFEFF'), 'paypal.com', 'zero-width characters used to fake a name');
+  assert.equal(safeText('שלום\u200F world\u200E 😀 O\'Reilly'), 'שלום\u200F world\u200E 😀 O\'Reilly', 'Hebrew, English, emoji and the harmless direction marks stay');
+  assert.equal(safeText('a\u0000b\u0007c\u001Bd\u009Fe'), 'abcde', 'control characters');
+  assert.equal(safeText('line1\nline2\ttab'), 'line1\nline2\ttab', 'newline and tab are normal text');
+  for (const bad of [null, undefined, 5, {}, [], true]) assert.equal(safeText(bad), '');
+});
+
+test('safeText: random strings never keep a forbidden character, and cleaning twice equals cleaning once', () => {
+  const pool = ['a', 'ש', ' ', '\u202E', '\u200B', '\u2066', '\u0000', '😀', '\uFEFF', '\u200F', 'Z', '\n', '\u009F', '\u2069', '9'];
+  const next = rng(7);
+  for (let n = 0; n < 3000; n++) {
+    let s = ''; for (let i = 0, len = Math.floor(next() * 40); i < len; i++) s += pool[Math.floor(next() * pool.length)];
+    const once = safeText(s);
+    assert.doesNotMatch(once, FORBIDDEN, JSON.stringify(s));
+    assert.equal(safeText(once), once, 'idempotent: ' + JSON.stringify(s));
+  }
+});
+
+// Random mails, some of them broken in ways a real mailbox could produce.
+function randomRow(next, now) {
+  const pick = (list) => list[Math.floor(next() * list.length)];
+  const age = pick([0, 1, 59, 3600, 86399, 86400, 86401, 7 * 86400, -3600, -86400 * 3]) * 1000 + Math.floor(next() * 5000);
+  return pick([
+    () => ({ from_name: pick(['A', null, '', 'Name <a@b.c>']), subject: pick(['S', null]), category: pick(['finance', 'work', 'other', 'weird', null, undefined]), summary: 'x', urgency: pick(['high', 'low', 'normal', null, 'HIGH', 'urgent', undefined]), suggested_action: pick([null, '', '  ', 'do it', 5]), received_at: new Date(now.getTime() - age).toISOString() }),
+    () => ({ received_at: pick(['garbage', '', null, undefined, 12345, {}, '2026-13-45T99:99:99Z']) }),
+    () => pick([null, undefined, 5, 'str', [], {}]),
+  ])();
+}
+
+test('dailySummary invariants hold for 2000 random mailboxes (including broken rows and clock-skewed dates)', () => {
+  const now = new Date('2026-10-12T09:00:00Z');
+  const next = rng(2026);
+  for (let n = 0; n < 2000; n++) {
+    const rows = Array.from({ length: Math.floor(next() * 60) }, () => randomRow(next, now));
+    const s = dailySummary(rows, now, 200);
+    assert.ok(s.total >= 0 && s.total <= rows.length);
+    assert.ok(s.urgentCount <= s.total, 'urgent mails are a subset of the mails');
+    assert.ok(s.urgent.length <= 5 && s.urgent.length === Math.min(5, s.urgentCount));
+    assert.equal(s.urgentMore, s.urgentCount - s.urgent.length);
+    assert.equal(s.byCategory.reduce((sum, entry) => sum + entry.count, 0), s.total, 'every counted mail is in exactly one category');
+    assert.ok(s.actionCount <= s.total);
+    for (let i = 1; i < s.byCategory.length; i++) assert.ok(s.byCategory[i - 1].count >= s.byCategory[i].count, 'biggest category first');
+    const times = s.urgent.map((row) => new Date(row.received_at).getTime());
+    for (let i = 1; i < times.length; i++) assert.ok(times[i - 1] >= times[i], 'newest first');
+    for (const row of s.urgent) assert.equal(row.urgency, 'high');
+    assert.equal(typeof summaryHeadline(s.total), 'string');
+  }
+});
+
+test('dailySummary does not depend on the order of the rows (metamorphic check)', () => {
+  const now = new Date('2026-10-12T09:00:00Z');
+  const next = rng(99);
+  for (let n = 0; n < 300; n++) {
+    const rows = Array.from({ length: 30 }, () => randomRow(next, now)).filter((row) => row && typeof row === 'object');
+    const shuffled = rows.map((row) => [next(), row]).sort((a, b) => a[0] - b[0]).map((pair) => pair[1]);
+    const a = dailySummary(rows, now, 200); const b = dailySummary(shuffled, now, 200);
+    assert.equal(a.total, b.total); assert.equal(a.urgentCount, b.urgentCount); assert.equal(a.actionCount, b.actionCount);
+    assert.deepEqual(a.byCategory, b.byCategory);
+  }
+});
+
+test('dailySummary: the 24 hour edge is exact, in every season, and the input is never changed', () => {
+  for (const nowText of ['2026-03-27T23:59:59.999Z', '2026-10-25T01:30:00Z', '2028-02-29T00:00:00Z', '2026-12-31T23:59:59Z']) {
+    const now = new Date(nowText);
+    const at = (msAgo) => ({ category: 'work', summary: 'x', received_at: new Date(now.getTime() - msAgo).toISOString() });
+    const rows = [at(86399999), at(86400000), at(86400001), at(0), at(-1)];
+    const copy = JSON.parse(JSON.stringify(rows));
+    assert.equal(dailySummary(rows, now).total, 3, nowText + ': 24h minus 1 ms counts, exactly 24h does not; "now" and a clock-skewed future mail count');
+    assert.deepEqual(rows, copy, 'the rows were not modified');
+  }
+});
+
+test('dailySummary: a 100000-mail mailbox is summarized fast', () => {
+  const now = new Date('2026-10-12T09:00:00Z');
+  const rows = Array.from({ length: 100000 }, (_, i) => ({ category: 'work', summary: 's', urgency: i % 9 === 0 ? 'high' : 'normal', received_at: new Date(now.getTime() - (i % 200000) * 1000).toISOString() }));
+  const started = Date.now();
+  const s = dailySummary(rows, now, 200);
+  assert.ok(Date.now() - started < 2000, 'under 2 seconds');
+  assert.ok(s.total > 0);
 });

@@ -2,9 +2,10 @@
 // stores it (server side only) and sends the member back to the page. Deployed WITHOUT jwt verification
 // because the redirect comes from Google, not from our page; the one-time `state` identifies the member.
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { backUrl, consentOutcome } from './logic.ts';
 
 function back(appUrl: string, result: string): Response {
-  return new Response(null, { status: 302, headers: { Location: `${appUrl}${appUrl.includes('?') ? '&' : '?'}gmail=${result}` } });
+  return new Response(null, { status: 302, headers: { Location: backUrl(appUrl, result) } });
 }
 
 Deno.serve(async (req: Request) => {
@@ -27,20 +28,37 @@ Deno.serve(async (req: Request) => {
   await admin.from('gmail_oauth_states').delete().eq('state', state); // one use only
   if (Date.now() - new Date(row.created_at).getTime() > 10 * 60 * 1000) return back(appUrl, 'expired');
 
-  const response = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      code,
-      client_id: Deno.env.get('GOOGLE_CLIENT_ID')!,
-      client_secret: Deno.env.get('GOOGLE_CLIENT_SECRET')!,
-      redirect_uri: `${url}/functions/v1/gmail-callback`,
-      grant_type: 'authorization_code',
-    }),
-  });
-  const tokens = await response.json();
-  if (!response.ok || !tokens.refresh_token) return back(appUrl, 'error');
-
+  // Google being unreachable, or answering with something that is not JSON, must end on the page with a message, not on a blank error.
+  let response: Response;
+  let tokens: any;
+  try {
+    response = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: Deno.env.get('GOOGLE_CLIENT_ID')!,
+        client_secret: Deno.env.get('GOOGLE_CLIENT_SECRET')!,
+        redirect_uri: `${url}/functions/v1/gmail-callback`,
+        grant_type: 'authorization_code',
+      }),
+    });
+    tokens = await response.json().catch(() => ({}));
+  } catch {
+    return back(appUrl, 'error');
+  }
+  const outcome = consentOutcome(response.ok, tokens);
+  if (outcome === 'error') return back(appUrl, 'error');
+  if (outcome === 'missing_scope') {
+    // Google lets the member untick single permissions on the consent screen. Without the Gmail permission the agent can
+    // never read anything, so do not store a connection that looks alive but fails on every run: undo the grant and say why.
+    await fetch('https://oauth2.googleapis.com/revoke', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ token: tokens.refresh_token }),
+    }).catch(() => null);
+    return back(appUrl, 'missing_scope');
+  }
   // The e-mail address comes straight from Google's answer (id_token payload) over TLS.
   let email: string | null = null;
   try {
@@ -52,7 +70,8 @@ Deno.serve(async (req: Request) => {
   // Connecting a DIFFERENT Google account: the summaries of the old account must not stay mixed with the new one.
   const { data: existing } = await admin.from('gmail_connections').select('google_email').eq('user_id', row.user_id).maybeSingle();
   if (existing?.google_email && email && existing.google_email.toLowerCase() !== email.toLowerCase()) {
-    await admin.from('gmail_digest').delete().eq('user_id', row.user_id);
+    const wipe = await admin.from('gmail_digest').delete().eq('user_id', row.user_id);
+    if (wipe.error) return back(appUrl, 'error'); // never mix two accounts: stop before storing the new connection
   }
 
   const { error } = await admin.from('gmail_connections').upsert({

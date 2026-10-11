@@ -98,6 +98,12 @@
     return `${count} מיילים דחופים:`;
   }
 
-  return { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline };
+  // Same rule as the server (stripControls in logic.ts): text written by other people cannot reorder what is shown.
+  function safeText(value) {
+    if (typeof value !== 'string') return '';
+    return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200D\u2060\u202A-\u202E\u2066-\u2069\uFEFF]/g, '');
+  }
+
+  return { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText };
 });
 

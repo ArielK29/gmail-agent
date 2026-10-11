@@ -115,3 +115,35 @@ node --test docs/logic.test.js supabase/functions/gmail-sync/logic.test.ts supab
 
 **Deployed:** gmail-sync v12 (3 files: `index.ts`, `sync.ts`, `logic.ts`). A forced run like the scheduler's: `200`, `{"saved":0,"connected":true,"problems":[]}` (no new mail at that moment).
 Still not covered: the real Gmail and Gemini services themselves.
+
+## Deep bug hunt (2026-10-12): everything found in one pass
+Method: read every file (page, 3 pages of text, 5 functions, 6 migrations, tests), run the page in a real browser with hostile data (very long words, HTML in subjects, bidi override characters, missing sender, 200 mails), probe the deployed functions from outside, run permission tests as two members and a stranger, and add tests of a kind that normal checks do not cover: random inputs by the thousand, a chaos simulation, metamorphic checks and time edges.
+
+| # | Found | Severity | Fix | Proof |
+|---|---|---|---|---|
+| 1 | A long word without spaces (a long sender, subject or link-like text) stretched the whole page to 3482 px; the "check now" button was pushed off screen | High | `overflow-wrap:anywhere`, `min-width:0`, no horizontal scroll | Browser at 375 px: `scrollWidth` = viewport, button visible |
+| 2 | **Mail lost** when Gmail answered 429/5xx for one mail: it was dropped and the history position moved on | High | A mail is skipped only on 404 (deleted); any other failure holds the position and is retried | 3 deterministic tests + chaos run; mutation checked |
+| 3 | **Mail lost** when more than 500 mails (5 history pages) piled up: the position jumped to the mailbox head and the unread pages were never read | High | The position moves only to the last history record that was really read | Test with 7 pages; mutation checked |
+| 4 | Connecting while un-ticking the Gmail permission on Google's screen stored a connection that failed on every run | Medium | The callback checks the granted scope, revokes the grant and shows a Hebrew message | `gmail-callback/logic.test.ts`; message verified in the page |
+| 5 | The "check now" cooldown did not hold while the model kept failing (every press = up to 4 model calls) | Medium | Every attempt is stamped (`last_attempt_at`, migration 006); the cooldown uses it; the scheduled run also orders by it | `isThrottled` tests; stamp verified in the live database |
+| 6 | Text written by other people could reorder what the member reads (right-to-left override in a subject) | Medium | Bidi, zero-width and control characters are removed when saved and again when shown | Property tests (3000 strings), browser check |
+| 7 | After sign-out the previous member's mails stayed in the page's memory and DOM; stale notices stayed on the login screen | Medium | Everything of the member is wiped on sign-out | Browser check after sign-out |
+| 8 | The page could break for up to 10 minutes after a deploy (cached old `logic.js` without the new functions); a thrown error in loading left the page silently half empty | Medium | Version in the script address, feature check with one automatic reload, `try/catch` with a Hebrew message, an older answer never overwrites a newer one | Code review, browser check |
+| 9 | `cleanText` could return text ending with a space after the length cut | Low | Cut, then trim | Found by the random test |
+| 10 | The privacy page said revoked access deletes the connection automatically (it marks it as expired) and did not list urgency and suggested action as stored | Medium (a legal statement that was untrue) | Text corrected on privacy, terms and about | Read against the code |
+| 11 | The callback crashed on an unreachable or non-JSON Google answer; two accounts could mix if wiping the old summaries failed | Low | Both handled | Review; endpoint probes |
+| 12 | Sign-in could be submitted twice; no favicon (a 404 on every page load) | Low | Buttons disabled while waiting; icon added | Browser |
+
+### New kinds of tests
+- **Chaos simulation** (`sync.test.ts`): 60 random worlds. Google, Gemini and the database fail at random in every step for 6 runs, then everything heals. Always true: the position never passes an unsaved mail, a saved mail is never sent to the model again, the usage counter never exceeds the saved mails, and after healing exactly the mails that still exist are saved. Mutation checked with 6 deliberate breakages (all caught).
+- **Two runs at the same time** (the scheduler and the button): no duplicates, nothing lost.
+- **Random inputs** (seeded, replayable): `cleanText` 3000, `parseModelAnswer` 4000 hostile answers, `planBatch` 3000 plans, `callWithRetry` 1500 answer sequences, `classifyTokenResponse` 2000, `dailySummary` 2000 mailboxes including broken rows and clock-skewed dates.
+- **Metamorphic checks**: the daily summary does not depend on the order of the rows; cleaning text twice equals cleaning once.
+- **Time edges**: exactly 24 hours, 23:59:59.999, a leap day, year end, daylight-saving dates, +02:00 and -05:00 inputs; a 100000-mail mailbox in under 2 seconds.
+- **Outside-in probes** of the deployed functions: no token, garbage token, the publishable key as a token, wrong method, forged and oversized `state`, evil redirect parameters (ignored): every answer was the expected one.
+- **Permission test as two members and a stranger** (`supabase/tests/rls_gmail_agent_hardening_test.sql`): 26 lines, all good (the token, `history_id` and `last_attempt_at` columns are unreadable, `select *` is denied, no write is possible from the browser, one member cannot touch the other's rows, account deletion removes everything of the member and nothing of the other).
+
+### Result
+`node --test docs/logic.test.js supabase/functions/gmail-sync/logic.test.ts supabase/functions/gmail-sync/sync.test.ts supabase/functions/gmail-callback/logic.test.ts`
+Deployed: gmail-sync v13, gmail-callback v5, migration 006. Snyk Code: the only findings left are the two known ones in `dev-server.js` (a local helper). Supabase advisors: unchanged (`pg_net` in `public`, leaked-password protection: Pro plan).
+Not covered: the real Gmail and Gemini services, the real Google consent screen (needs #7), the sign-up e-mail.

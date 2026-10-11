@@ -4,9 +4,12 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>סוכן Gmail</title>
+  <link rel="icon" href="logo-120.png" type="image/png" />
   <style>
     :root { --bg:#0d0d0d; --surface:#1a1a1a; --line:#2a2a2a; --text:#f5f5f5; --muted:#a0a0a0; --accent:#00e5ff; --pink:#ff00a8; }
     * { box-sizing: border-box; }
+    html { overflow-x: hidden; }
+    main, .card, .item, .urgent-item, .status, .summary-line, #notice { min-width: 0; overflow-wrap: anywhere; }
     body { margin:0; background:var(--bg); color:var(--text); font-family: system-ui, "Segoe UI", Arial, sans-serif; }
     main { max-width: 640px; margin: 0 auto; padding: 24px 16px 64px; }
     h1 { font-size: 28px; margin: 0 0 4px; }
@@ -110,11 +113,18 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js"></script>
-<script src="logic.js"></script>
+<script src="logic.js?v=20261012"></script>
 <script>
   // config.js defines window.APP_CONFIG = { supabaseUrl, supabaseKey } (the publishable key; never a secret key).
   const { supabaseUrl, supabaseKey } = window.APP_CONFIG;
   const logic = window.AgentLogic; // Hebrew messages and validation, tested in Node (docs/logic.test.js)
+  const LOGIC_FUNCTIONS = ['authMessage', 'validateCredentials', 'problemMessage', 'emptyStateText', 'dailySummary', 'summaryHeadline', 'urgentHeadline', 'safeText'];
+  if (!logic || LOGIC_FUNCTIONS.some((name) => typeof logic[name] !== 'function')) {
+    // An old cached copy of logic.js: ask for a fresh page once instead of showing a broken one.
+    let already = false; try { already = Boolean(sessionStorage.getItem('logicReload')); sessionStorage.setItem('logicReload', '1'); } catch { already = true; }
+    if (!already) location.reload();
+    throw new Error('logic.js is out of date');
+  }
   const db = supabase.createClient(supabaseUrl, supabaseKey);
   const $ = (id) => document.getElementById(id);
   const CATEGORY_HE = { important:'חשוב', personal:'אישי', work:'עבודה', finance:'כספים', newsletter:'ניוזלטר', promotion:'פרסומת', notification:'התראה', other:'אחר' };
@@ -160,7 +170,7 @@
     if (rows.length === 0) { box.textContent = 'אין מיילים שמתאימים לסינון.'; return; }
     for (const row of rows) {
       const item = document.createElement('div'); item.className = 'item';
-      const from = document.createElement('span'); from.className = 'from'; from.textContent = row.from_name || 'לא ידוע';
+      const from = document.createElement('span'); from.className = 'from'; from.textContent = logic.safeText(row.from_name) || 'לא ידוע';
       const tag = document.createElement('span'); tag.className = 'tag'; tag.textContent = CATEGORY_HE[row.category] || row.category;
       item.append(from, tag);
       if (row.urgency === 'high' || row.urgency === 'low') {
@@ -168,11 +178,11 @@
         level.textContent = row.urgency === 'high' ? 'דחוף' : 'לא דחוף';
         item.append(level);
       }
-      const subject = document.createElement('div'); subject.className = 'subject'; subject.textContent = row.subject || '(ללא נושא)';
-      const summary = document.createElement('div'); summary.className = 'summary'; summary.textContent = row.summary;
+      const subject = document.createElement('div'); subject.className = 'subject'; subject.textContent = logic.safeText(row.subject) || '(ללא נושא)';
+      const summary = document.createElement('div'); summary.className = 'summary'; summary.textContent = logic.safeText(row.summary);
       item.append(subject, summary);
       if (row.suggested_action) {
-        const action = document.createElement('div'); action.className = 'action'; action.textContent = 'הצעה אוטומטית: ' + row.suggested_action;
+        const action = document.createElement('div'); action.className = 'action'; action.textContent = 'הצעה אוטומטית: ' + logic.safeText(row.suggested_action);
         item.append(action);
       }
       box.append(item);
@@ -196,10 +206,10 @@
       for (const row of summary.urgent) {
         const item = document.createElement('div'); item.className = 'urgent-item';
         const head = document.createElement('div');
-        head.textContent = `${row.from_name || 'לא ידוע'} · ${row.subject || '(ללא נושא)'}`;
-        const body = document.createElement('div'); body.className = 'subject'; body.textContent = row.summary;
+        head.textContent = `${logic.safeText(row.from_name) || 'לא ידוע'} · ${logic.safeText(row.subject) || '(ללא נושא)'}`;
+        const body = document.createElement('div'); body.className = 'subject'; body.textContent = logic.safeText(row.summary);
         item.append(head, body);
-        if (row.suggested_action) { const action = document.createElement('div'); action.className = 'action'; action.textContent = 'הצעה אוטומטית: ' + row.suggested_action; item.append(action); }
+        if (row.suggested_action) { const action = document.createElement('div'); action.className = 'action'; action.textContent = 'הצעה אוטומטית: ' + logic.safeText(row.suggested_action); item.append(action); }
         urgentBox.append(item);
       }
       if (summary.urgentMore > 0) { const more = document.createElement('div'); more.className = 'status'; more.textContent = `ועוד ${summary.urgentMore} דחופים ברשימה למטה.`; urgentBox.append(more); }
@@ -208,41 +218,69 @@
     $('summaryNote').textContent = summary.incomplete ? 'הסיכום מבוסס על 200 המיילים האחרונים, ייתכן שיש עוד.' : '';
   }
 
-  async function refresh() {
-    const { data: session } = await db.auth.getSession();
-    const signedIn = Boolean(session.session);
-    show($('login'), !signedIn); show($('app'), signedIn); show($('digestCard'), signedIn);
-    if (!signedIn) { show($('summaryCard'), false); return; }
-
-    const connectionResult = await db.from('gmail_connections').select('google_email, last_checked_at, status').maybeSingle();
-    const digestResult = await db.from('gmail_digest').select('from_name, subject, category, summary, urgency, suggested_action, received_at')
-      .order('received_at', { ascending: false }).limit(200);
-    // A database error must never look like "not connected" or "no emails".
-    if (connectionResult.error || digestResult.error) { notify(LOAD_ERROR); show($('summaryCard'), false); return; }
-
-    const connection = connectionResult.data;
-    const connected = Boolean(connection);
-    const expired = connected && connection.status === 'needs_reconnect';
-    connectionState = { connected, expired };
-    $('connection').textContent = expired
-      ? 'החיבור ל-Gmail פג (Google ביטלה את ההרשאה, או שעברו 7 ימים בגרסת הבדיקה). לחץ "חבר את Gmail" כדי לחבר מחדש.'
-      : connected
-        ? `מחובר: ${connection.google_email || 'Gmail'}${connection.last_checked_at ? ' · נבדק לאחרונה ' + new Date(connection.last_checked_at).toLocaleString('he-IL') : ''}`
-        : 'Gmail עדיין לא מחובר.';
-    show($('connect'), !connected || expired); show($('check'), connected && !expired); show($('disconnect'), connected);
-
-    allRows = digestResult.data || [];
-    renderSummary();
-    renderDigest();
+  // What belongs to a signed-in member (mails, summary, filters) is wiped from the page the moment they sign out,
+  // so nothing stays in the page for the next person on a shared computer.
+  function clearMemberData() {
+    allRows = [];
+    connectionState = { connected: false, expired: false };
+    for (const id of ['digest', 'summaryUrgent', 'summaryHeadline', 'summaryCategories', 'summaryNote', 'digestCount', 'connection']) $(id).textContent = '';
+    $('search').value = ''; $('filterCategory').value = ''; $('filterUrgency').value = '';
+    show($('summaryCard'), false);
   }
 
+  let refreshSeq = 0;
+  async function refresh() {
+    const mine = ++refreshSeq; // an older answer must never overwrite a newer one
+    try {
+      const { data: session } = await db.auth.getSession();
+      if (mine !== refreshSeq) return;
+      const signedIn = Boolean(session.session);
+      show($('login'), !signedIn); show($('app'), signedIn); show($('digestCard'), signedIn);
+      if (!signedIn) { clearMemberData(); return; }
+
+      const connectionResult = await db.from('gmail_connections').select('google_email, last_checked_at, status').maybeSingle();
+      const digestResult = await db.from('gmail_digest').select('from_name, subject, category, summary, urgency, suggested_action, received_at')
+        .order('received_at', { ascending: false }).limit(DIGEST_LIMIT);
+      if (mine !== refreshSeq) return;
+      // A database error must never look like "not connected" or "no emails".
+      if (connectionResult.error || digestResult.error) { notify(LOAD_ERROR); show($('summaryCard'), false); return; }
+      if ($('notice').textContent === LOAD_ERROR) notify('');
+
+      const connection = connectionResult.data;
+      const connected = Boolean(connection);
+      const expired = connected && connection.status === 'needs_reconnect';
+      connectionState = { connected, expired };
+      $('connection').textContent = expired
+        ? 'החיבור ל-Gmail פג (Google ביטלה את ההרשאה, או שעברו 7 ימים בגרסת הבדיקה). לחץ "חבר את Gmail" כדי לחבר מחדש.'
+        : connected
+          ? `מחובר: ${connection.google_email || 'Gmail'}${connection.last_checked_at ? ' · נבדק לאחרונה ' + new Date(connection.last_checked_at).toLocaleString('he-IL') : ''}`
+          : 'Gmail עדיין לא מחובר.';
+      show($('connect'), !connected || expired); show($('check'), connected && !expired); show($('disconnect'), connected);
+
+      allRows = digestResult.data || [];
+      renderSummary();
+      renderDigest();
+    } catch {
+      // A network failure while loading: say so, never leave the page silently half empty.
+      if (mine === refreshSeq) { notify(LOAD_ERROR); show($('summaryCard'), false); }
+    }
+  }
   async function authAction(kind) {
     $('loginStatus').textContent = '';
     const problem = logic.validateCredentials($('email').value, $('password').value);
     if (problem) { $('loginStatus').textContent = problem; return; }
     const credentials = { email: $('email').value.trim(), password: $('password').value };
-    const { error } = kind === 'in' ? await db.auth.signInWithPassword(credentials) : await db.auth.signUp(credentials);
+    for (const id of ['signIn', 'signUp', 'google']) $(id).disabled = true; // no double submit
+    let error;
+    try {
+      ({ error } = kind === 'in' ? await db.auth.signInWithPassword(credentials) : await db.auth.signUp(credentials));
+    } catch (e) {
+      error = e; // a thrown network error is shown like any other error
+    } finally {
+      for (const id of ['signIn', 'signUp', 'google']) $(id).disabled = false;
+    }
     if (error) { $('loginStatus').textContent = logic.authMessage(error); return; }
+    notify('');
     if (kind === 'up') $('loginStatus').textContent = 'נשלח מייל אישור (אם נדרש). אחרי האישור התחבר.';
     refresh();
   }
@@ -267,7 +305,7 @@
     });
     if (error) $('loginStatus').textContent = logic.authMessage(error);
   };
-  $('signOut').onclick = async () => { await db.auth.signOut(); refresh(); };
+  $('signOut').onclick = async () => { await db.auth.signOut(); notify(''); refresh(); };
 
   $('connect').onclick = async () => {
     notify('פותח את Google...');
@@ -307,7 +345,7 @@
   const result = new URLSearchParams(location.search).get('gmail');
   if (result) {
     history.replaceState(null, '', location.pathname);
-    const texts = { connected: 'Gmail חובר בהצלחה.', cancelled: 'החיבור בוטל.', expired: 'הקישור פג תוקף. נסה שוב.', error: 'החיבור נכשל. נסה שוב.' };
+    const texts = { connected: 'Gmail חובר בהצלחה.', cancelled: 'החיבור בוטל.', expired: 'הקישור פג תוקף. נסה שוב.', missing_scope: 'לא אישרת גישה לקריאת Gmail במסך של Google, ולכן לא חיברנו. לחץ "חבר את Gmail" ושמור את ההרשאה מסומנת.', error: 'החיבור נכשל. נסה שוב.' };
     notify(texts[result] || '');
   }
   db.auth.onAuthStateChange(() => refresh());

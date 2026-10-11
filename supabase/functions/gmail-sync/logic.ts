@@ -12,7 +12,14 @@ export interface Classified {
 // The model's words come from untrusted email text: links are removed and the length is cut.
 export function cleanText(value: unknown, max: number): string {
   if (typeof value !== 'string') return '';
-  return value.replace(/(https?:\/\/|www\.)\S+/gi, '').replace(/\s+/g, ' ').trim().slice(0, max);
+  return stripControls(value).replace(/(https?:\/\/|www\.)\S+/gi, '').replace(/\s+/g, ' ').trim().slice(0, max).trim(); // cut first, trim again: the cut may end on a space
+}
+
+// Text that comes from other people must not be able to rearrange what the member reads: bidi overrides / embeddings /
+// isolates (they can make "invoice<RLO>fdp.exe" look like a PDF), zero-width characters, the byte-order mark and control
+// characters are removed. Hebrew and English letters, digits, emoji and the harmless direction marks (LRM / RLM) stay.
+export function stripControls(value: string): string {
+  return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200D\u2060\u202A-\u202E\u2066-\u2069\uFEFF]/g, '');
 }
 
 // Old Hebrew emails often use windows-1255 / iso-8859-8: the part's own charset is honored, UTF-8 if unknown.
@@ -90,4 +97,21 @@ export function classifyTokenResponse(status: number, body: { access_token?: str
   if (status >= 200 && status < 300 && body.access_token) return { kind: 'ok', token: body.access_token };
   if (status === 400 && body.error === 'invalid_grant') return { kind: 'revoked' };
   return { kind: 'failed', reason: 'Google token: ' + (body.error ?? status) };
+}
+
+// "Check now" cooldown. An ATTEMPT counts as much as a success: when the model keeps failing, last_checked_at never moves,
+// and without this the button could be pressed again and again (each press = up to 4 model calls).
+export function isThrottled(lastCheckedAt: string | null, lastAttemptAt: string | null, now: number, cooldownMs: number): boolean {
+  const times = [lastCheckedAt, lastAttemptAt].map((value) => (value ? new Date(value).getTime() : NaN)).filter((time) => Number.isFinite(time));
+  if (times.length === 0) return false;
+  return now - Math.max(...times) < cooldownMs;
+}
+
+// Gmail history ids are big numbers in text form: compare them as numbers. A value that is not a number never wins.
+export function maxHistoryId(a: string | null | undefined, b: string | null | undefined): string | null {
+  const valid = (value: string | null | undefined): value is string => typeof value === 'string' && /^\d+$/.test(value);
+  if (valid(a) && valid(b)) return BigInt(a) >= BigInt(b) ? a : b;
+  if (valid(a)) return a;
+  if (valid(b)) return b;
+  return null;
 }
