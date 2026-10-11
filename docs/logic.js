@@ -219,14 +219,16 @@
     const nowMs = now instanceof Date ? now.getTime() : Date.now();
     const received = (row) => (row.received_at ? new Date(row.received_at).getTime() : NaN);
 
-    const deadlines = list
+    const open = list.filter((row) => !row.handled_at); // a mail the member marked as handled leaves the briefing
+
+    const deadlines = open
       .filter((row) => isRealDay(row.due_date))
       .map((row) => ({ row, diff: dayNumber(row.due_date) - dayNumber(today) }))
       .filter((entry) => entry.diff >= -30 && entry.diff <= 7)
       .sort((a, b) => a.diff - b.diff || received(b.row) - received(a.row))
       .map((entry) => ({ ...entry, label: deadlineLabel(entry.diff) }));
 
-    const replies = list
+    const replies = open
       .filter((row) => row.needs_reply === true && Number.isFinite(received(row)) && nowMs - received(row) >= 12 * 3600 * 1000 && nowMs - received(row) <= 14 * 24 * 3600 * 1000)
       .sort((a, b) => received(a) - received(b))
       .map((row) => ({ row, label: replyAgeLabel((nowMs - received(row)) / 3600000) }));

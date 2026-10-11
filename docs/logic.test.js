@@ -357,6 +357,21 @@ test('morningBriefing: "waiting for my answer" = flagged true, at least 12 hours
   assert.deepEqual(b.replies.map((r) => r.label), ['לפני 14 ימים', 'לפני 2 ימים', 'לפני כמה שעות']);
 });
 
+test('morningBriefing: a mail marked as handled leaves both lists but still counts as new since the last visit', () => {
+  const rows = [
+    brow({ subject: 'open reply', needs_reply: true, received_at: bAgo(50) }),
+    brow({ subject: 'done reply', needs_reply: true, received_at: bAgo(50), handled_at: '2026-10-12T08:00:00Z' }),
+    brow({ subject: 'open deadline', due_date: '2026-10-13', received_at: bAgo(3) }),
+    brow({ subject: 'done deadline', due_date: '2026-10-13', received_at: bAgo(3), handled_at: '2026-10-12T08:00:00Z' }),
+  ];
+  const b = morningBriefing(rows, BNOW, BNOW.getTime() - 6 * 3600 * 1000, '2026-10-12');
+  assert.deepEqual(b.replies.map((r) => r.row.subject), ['open reply']);
+  assert.deepEqual(b.deadlines.map((r) => r.row.subject), ['open deadline']);
+  assert.equal(b.newSince, 2);
+  const allDone = morningBriefing(rows.filter((r) => r.handled_at), BNOW, null, '2026-10-12');
+  assert.equal(allDone.empty, true);
+});
+
 test('morningBriefing: "new since my last visit" counts mails after that moment; unknown when there was no visit', () => {
   const rows = [brow({ received_at: bAgo(1) }), brow({ received_at: bAgo(5) }), brow({ received_at: bAgo(50) }), brow({ received_at: 'garbage' })];
   assert.equal(morningBriefing(rows, BNOW, BNOW.getTime() - 6 * 3600 * 1000, '2026-10-12').newSince, 2);

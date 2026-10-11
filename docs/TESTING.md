@@ -184,3 +184,14 @@ Deployed: gmail-sync v15 (the model also returns a deadline; after each sync up 
 Bugs found by these tests while building it (all fixed before deploy): `pickReplyCandidates` with limit 0 returned a thread; a "waiting for answer" flag of one thread was also applied to mails in it that are not reply-worthy; the cleaned text could end with a space after the length cut.
 
 Not covered: the real quality of the model's deadline guess on real mails, the real Gmail thread answers, and delivery as a push message (issue #14, needs a channel). Marking an item "done" is not built.
+### "Handled" button (agent 1, v2, 2026-10-12)
+A button "סימנתי כטופל" on every item of the briefing. The member sets `handled_at` on their own mail; the item leaves the briefing (the mail stays in the list below and still counts as new since the last visit). Migration 011: column-level `update (handled_at)` grant plus an own-row update policy, nothing else is writable from the browser.
+
+| Layer | Test | Result |
+|---|---|---|
+| Permissions | `supabase/tests/rls_gmail_handled_test.sql`: marks own mail, unmarks, cannot mark another member's mail (0 rows), cannot edit summary / needs_reply / due_date / user_id, cannot insert, anon denied, other member untouched | 11 lines, all good |
+| Page logic | handled rows leave both lists but count as new; all-handled gives the empty state | 37 page tests pass |
+| Mutation check | the filter removed (all, only replies, only deadlines) | each made a test fail; restored |
+| Browser (throw-away member, localhost) | 3 seeded items; pressing the button removed only that item, the database row got `handled_at`, a reload kept it hidden, no horizontal scroll; member deleted afterwards (1 user, 1 connection left) | pass |
+| Whole suite | `node --test` on all six files | 133 pass |
+Security advisors: unchanged (the known `pg_net` and leaked-password items; the four "no policy" notices are server-only tables on purpose).
