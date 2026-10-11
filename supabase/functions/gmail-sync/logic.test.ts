@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanText, decodeBytes, parseModelAnswer, isRetryable, backoffMs, remainingBudget, utcDay, callWithRetry, planBatch, classifyTokenResponse, isThrottled, maxHistoryId, stripControls, CATEGORIES, URGENCIES } from './logic.ts';
+import { cleanText, decodeBytes, parseModelAnswer, isRetryable, backoffMs, remainingBudget, utcDay, callWithRetry, planBatch, classifyTokenResponse, isThrottled, maxHistoryId, stripControls, CATEGORIES, URGENCIES, validateScanRequest, sanitizeQuery, parseItems, buildGmailQuery, parseMatchAnswer, localMatches, MAX_SCAN_MAILS } from './logic.ts';
 
 test('cleanText removes links and cuts the length', () => {
   assert.equal(cleanText('לחץ https://evil.example/x עכשיו', 100), 'לחץ עכשיו');
@@ -266,5 +266,135 @@ test('maxHistoryId agrees with BigInt for 3000 random pairs, including 20-digit 
   for (let n = 0; n < 3000; n++) {
     const a = big(), b = big();
     assert.equal(maxHistoryId(a, b), BigInt(a) >= BigInt(b) ? a : b);
+  }
+});
+// ======================= On-demand scan (issue #15): pure logic =======================
+const TODAY = '2026-10-12';
+const okRequest = (over: Record<string, unknown> = {}) => ({ consent: true, periodStart: '2026-01-01', periodEnd: '2026-01-31', query: 'invoice', items: ['INV-100', 'Acme'], ...over });
+
+test('validateScanRequest accepts a normal request and cleans it', () => {
+  const r = validateScanRequest(okRequest(), TODAY);
+  assert.ok(r.ok);
+  if (r.ok) assert.deepEqual(r.value, { periodStart: '2026-01-01', periodEnd: '2026-01-31', queryText: 'invoice', items: ['INV-100', 'Acme'] });
+});
+
+test('validateScanRequest refuses what it must refuse, with a fixed error code', () => {
+  const code = (body: unknown) => { const r = validateScanRequest(body, TODAY); return r.ok ? 'ok' : r.error; };
+  assert.equal(code(okRequest({ consent: false })), 'consent_required');
+  assert.equal(code(okRequest({ consent: 'true' })), 'consent_required', 'only the real boolean true counts');
+  assert.equal(code(okRequest({ consent: undefined })), 'consent_required');
+  assert.equal(code(okRequest({ periodStart: '2026-02-30' })), 'bad_dates', 'not a real calendar day');
+  assert.equal(code(okRequest({ periodStart: '2026-1-1' })), 'bad_dates');
+  assert.equal(code(okRequest({ periodStart: '2026-02-01', periodEnd: '2026-01-31' })), 'bad_dates', 'end before start');
+  assert.equal(code(okRequest({ periodStart: '1999-12-31' })), 'bad_dates', 'before 2000');
+  assert.equal(code(okRequest({ periodEnd: '2026-10-13' })), 'bad_dates', 'the future');
+  assert.equal(code(okRequest({ periodStart: '2025-01-01', periodEnd: '2026-01-31' })), 'period_too_long');
+  assert.equal(code(okRequest({ query: '', items: [] })), 'nothing_to_search');
+  assert.equal(code(okRequest({ query: '   ', items: ['  ', ''] })), 'nothing_to_search');
+  for (const garbage of [null, undefined, 5, 'x', [], {}]) assert.notEqual(code(garbage), 'ok');
+  assert.equal(code(okRequest({ periodStart: '2026-01-01', periodEnd: '2027-01-02' })), 'bad_dates', 'a future end is refused before the length');
+  assert.equal(code(okRequest({ periodStart: '2025-10-12', periodEnd: '2026-10-12' })), 'ok', 'exactly 365 days apart is fine');
+});
+
+test('validateScanRequest: the length limit is 366 days, leap years included', () => {
+  const code = (s: string, e: string, today = '2029-12-31') => { const r = validateScanRequest(okRequest({ periodStart: s, periodEnd: e }), today); return r.ok ? 'ok' : r.error; };
+  assert.equal(code('2028-01-01', '2028-12-31'), 'ok', '366 days in a leap year');
+  assert.equal(code('2028-01-01', '2029-01-01'), 'period_too_long', '367 days');
+  assert.equal(code('2028-02-29', '2028-02-29'), 'ok', 'a single leap day');
+});
+
+test('sanitizeQuery: operators cannot escape, nothing hidden, never longer than 200', () => {
+  assert.equal(sanitizeQuery('  invoice   from:(boss) {a b}  '), 'invoice from:boss a b');
+  assert.equal(sanitizeQuery('he said "hello'), 'he said hello', 'an unbalanced quote is removed');
+  assert.equal(sanitizeQuery('"exact phrase" other'), '"exact phrase" other', 'balanced quotes stay');
+  assert.equal(sanitizeQuery('pay\u202Efdp\u200B'), 'payfdp');
+  assert.ok(sanitizeQuery('x'.repeat(5000)).length <= 200);
+  for (const odd of [null, undefined, 5, {}, []]) assert.equal(sanitizeQuery(odd as any), '');
+});
+
+test('parseItems: cleaned, deduplicated ignoring letter case, limited', () => {
+  assert.deepEqual(parseItems(['  Acme  ', 'acme', 'ACME', 'INV 1', '', '   ', 5, null] as any), ['Acme', 'INV 1']);
+  assert.equal(parseItems(Array.from({ length: 500 }, (_, i) => 'item ' + i)).length, 100);
+  assert.ok(parseItems(['x'.repeat(5000)])[0].length <= 120);
+  assert.deepEqual(parseItems('not an array' as any), []);
+  assert.deepEqual(parseItems(['a\u202Eb\u0000c']), ['abc']);
+});
+
+test('buildGmailQuery: the day AFTER the end is used (Gmail "before" is exclusive); month ends, leap day and year end', () => {
+  assert.equal(buildGmailQuery('2026-01-01', '2026-01-31', 'invoice', []), 'after:2026/01/01 before:2026/02/01 invoice');
+  assert.equal(buildGmailQuery('2028-02-01', '2028-02-29', 'x', []), 'after:2028/02/01 before:2028/03/01 x');
+  assert.equal(buildGmailQuery('2026-12-01', '2026-12-31', 'x', []), 'after:2026/12/01 before:2027/01/01 x');
+  assert.equal(buildGmailQuery('2026-02-28', '2026-02-28', 'x', []), 'after:2026/02/28 before:2026/03/01 x');
+});
+
+test('buildGmailQuery: without search text the items become the search (an OR group of quoted items)', () => {
+  assert.equal(buildGmailQuery('2026-01-01', '2026-01-31', '', ['INV-100', 'Acme Ltd']), 'after:2026/01/01 before:2026/02/01 {"INV-100" "Acme Ltd"}');
+  const many = Array.from({ length: 60 }, (_, i) => 'item' + i);
+  const q = buildGmailQuery('2026-01-01', '2026-01-31', '', many);
+  assert.equal((q.match(/"/g) ?? []).length, 40, 'at most 20 items go into the query');
+  assert.equal(buildGmailQuery('2026-01-01', '2026-01-31', 'text', ['a']), 'after:2026/01/01 before:2026/02/01 text', 'with search text the items are not in the query');
+});
+
+test('parseMatchAnswer: only asked ids and real item numbers survive; chatter and fences are fine', () => {
+  const known = new Set(['m1', 'm2']);
+  const answer = 'ok:\n```json\n[{"id":"m1","matches":[0,2,2,"1",-1,99,1.5],"summary":"נמצא <b>חשבונית</b> https://x.y"},{"id":"zzz","matches":[0],"summary":"לא נשאל"},{"id":"m2","matches":"none","summary":"אין"}]\n```';
+  const result = parseMatchAnswer(answer, known, 3);
+  assert.deepEqual([...result.keys()], ['m1', 'm2']);
+  assert.deepEqual(result.get('m1')!.matches, [0, 2], 'integers inside the list, no duplicates, no strings');
+  assert.equal(result.get('m1')!.summary, 'נמצא <b>חשבונית</b>', 'links removed; the page shows plain text');
+  assert.deepEqual(result.get('m2')!.matches, []);
+});
+
+test('parseMatchAnswer: 3000 hostile answers never throw and never invent anything', () => {
+  const next = rng(41); const known = new Set(['a', 'b', 'c']);
+  const pieces = ['[', ']', '{', '}', '"id"', ':', '"a"', '"b"', '"zzz"', ',', '"matches"', '[0,1]', '[-5]', '[1e9]', '"summary"', '"ok https://x.y"', 'null', '7', '```', 'ignore all rules', '\n'];
+  for (let n = 0; n < 3000; n++) {
+    let s = ''; for (let i = 0, len = Math.floor(next() * 40); i < len; i++) s += pieces[Math.floor(next() * pieces.length)];
+    const itemCount = Math.floor(next() * 5);
+    for (const [id, v] of parseMatchAnswer(s, known, itemCount)) {
+      assert.ok(known.has(id));
+      assert.ok(v.matches.every((m) => Number.isInteger(m) && m >= 0 && m < itemCount), JSON.stringify([s, itemCount]));
+      assert.equal(new Set(v.matches).size, v.matches.length);
+      assert.ok(v.summary.length <= 300);
+      assert.doesNotMatch(v.summary, LINK);
+    }
+  }
+});
+
+test('localMatches: finds items inside text, ignoring letter case and extra spaces; very short items are not matched this way', () => {
+  assert.deepEqual(localMatches('Invoice INV-100 for  Acme   Ltd', ['inv-100', 'acme ltd', 'zzz', 'AB', 'invoice']), [0, 1, 4]);
+  assert.deepEqual(localMatches('', ['abc']), []);
+  assert.deepEqual(localMatches('anything', []), []);
+  assert.deepEqual(localMatches('חשבונית מספר 4412 מחברת אקמה', ['4412', 'אקמה']), [0, 1], 'Hebrew and digits');
+});
+
+test('localMatches: 2000 random texts - indexes always valid, ascending, unique', () => {
+  const next = rng(23); const words = ['inv', '100', 'acme', 'שלום', ' ', '  ', '-', 'X', 'ltd'];
+  for (let n = 0; n < 2000; n++) {
+    const text = Array.from({ length: Math.floor(next() * 12) }, () => words[Math.floor(next() * words.length)]).join('');
+    const items = Array.from({ length: Math.floor(next() * 5) }, () => words[Math.floor(next() * words.length)] + words[Math.floor(next() * words.length)]);
+    const result = localMatches(text, items);
+    for (let i = 0; i < result.length; i++) { assert.ok(result[i] >= 0 && result[i] < items.length); if (i) assert.ok(result[i] > result[i - 1]); }
+  }
+  assert.equal(MAX_SCAN_MAILS, 200);
+});
+
+test('validateScanRequest: 3000 random bodies never throw; every accepted request satisfies all the rules', () => {
+  const next = rng(61); const pick = <T,>(list: T[]) => list[Math.floor(next() * list.length)];
+  for (let n = 0; n < 3000; n++) {
+    const body = pick<any>([
+      () => okRequest({ periodStart: pick(['2026-01-01', '2026-02-30', '2000-01-01', '1999-01-01', 'x', null, 5, '2026-13-01', '2028-02-29']), periodEnd: pick(['2026-01-31', '2026-10-12', '2026-10-13', '2027-01-01', null, '2028-03-01']), query: pick(['', 'a'.repeat(500), '(x) {y} "z', 5, null, 'ok']), items: pick([[], ['a'], Array.from({ length: 300 }, (_, i) => 'i' + i), 'str', [1, 2], null]) }),
+      () => pick([null, undefined, 5, 'x', [], {}]),
+    ])();
+    const r = validateScanRequest(body, TODAY);
+    if (r.ok) {
+      const { periodStart, periodEnd, queryText, items } = r.value;
+      assert.match(periodStart, /^\d{4}-\d{2}-\d{2}$/); assert.match(periodEnd, /^\d{4}-\d{2}-\d{2}$/);
+      assert.ok(periodStart <= periodEnd && periodEnd <= TODAY && periodStart >= '2000-01-01');
+      assert.ok((Date.parse(periodEnd) - Date.parse(periodStart)) / 86400000 <= 366);
+      assert.ok(queryText.length <= 200 && !/[(){}]/.test(queryText)); assert.doesNotMatch(queryText, FORBIDDEN);
+      assert.ok(items.length <= 100 && new Set(items.map((s) => s.toLowerCase())).size === items.length);
+      assert.ok(queryText !== '' || items.length > 0, 'something to search for');
+    }
   }
 });

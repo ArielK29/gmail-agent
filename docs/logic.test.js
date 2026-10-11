@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText } = require('./logic.js');
+const { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth } = require('./logic.js');
 
 test('authMessage maps the Supabase errors seen in the browser run', () => {
   assert.equal(authMessage({ message: 'Invalid login credentials' }), 'האימייל או הסיסמה שגויים.');
@@ -211,4 +211,84 @@ test('dailySummary: a 100000-mail mailbox is summarized fast', () => {
   const s = dailySummary(rows, now, 200);
   assert.ok(Date.now() - started < 2000, 'under 2 seconds');
   assert.ok(s.total > 0);
+});
+// ---- On-demand scan (issue #15): what the page decides ----
+test('scanErrorMessage: every code the server can send has a Hebrew sentence; unknown codes are Hebrew too', () => {
+  for (const code of ['consent_required', 'bad_dates', 'period_too_long', 'nothing_to_search', 'not_connected', 'needs_reconnect', 'scan_in_progress', 'daily_scan_limit', 'invalid_query', 'daily_budget', 'could_not_start', 'bad_request', 'not_found', 'weird', '', null, undefined, 5]) {
+    const text = scanErrorMessage(code);
+    assert.ok(typeof text === 'string' && text.length > 5);
+    assert.doesNotMatch(text.replace(/Gmail/g, ''), /[A-Za-z]/, String(code));
+  }
+});
+
+test('parseItemsText: one item per line, cleaned, no duplicates, at most 100', () => {
+  assert.deepEqual(parseItemsText('  INV-1 \n\ninv-1\nAcme Ltd\r\n   \nשלום'), ['INV-1', 'Acme Ltd', 'שלום']);
+  assert.equal(parseItemsText(Array.from({ length: 300 }, (_, i) => 'i' + i).join('\n')).length, 100);
+  assert.deepEqual(parseItemsText(''), []);
+  assert.deepEqual(parseItemsText(null), []);
+  assert.deepEqual(parseItemsText('a\u202Eb\u200Bc'), ['abc']);
+  assert.ok(parseItemsText('x'.repeat(5000))[0].length <= 120);
+});
+
+test('validateScanForm: the same rules as the server, in Hebrew, before anything is sent', () => {
+  const today = '2026-10-12';
+  const ok = { from: '2026-01-01', to: '2026-01-31', query: 'invoice', itemsText: 'INV-1', consent: true };
+  assert.equal(validateScanForm(ok, today), null);
+  assert.match(validateScanForm({ ...ok, consent: false }, today), /הסכמה/);
+  assert.match(validateScanForm({ ...ok, from: '' }, today), /תאריכ/);
+  assert.match(validateScanForm({ ...ok, from: '2026-02-30' }, today), /תאריכ/);
+  assert.match(validateScanForm({ ...ok, to: '2026-10-13' }, today), /תאריכ/);
+  assert.match(validateScanForm({ ...ok, from: '2026-02-01', to: '2026-01-01' }, today), /תאריכ/);
+  assert.match(validateScanForm({ ...ok, from: '2025-01-01', to: '2026-01-31' }, today), /שנה/);
+  assert.match(validateScanForm({ ...ok, query: '  ', itemsText: ' \n ' }, today), /לחפש/);
+  assert.equal(validateScanForm({ ...ok, from: '2028-01-01', to: '2028-12-31' }, '2029-12-31'), null, 'a leap year fits');
+  for (const garbage of [null, undefined, {}, 5]) assert.equal(typeof validateScanForm(garbage, today), 'string');
+});
+
+test('scanProgressText says what is happening, in Hebrew', () => {
+  assert.match(scanProgressText({ status: 'queued', processed: 0, total: 0 }), /מתחיל|ממתין/);
+  assert.match(scanProgressText({ status: 'running', processed: 30, total: 75 }), /30.*75/);
+  assert.match(scanProgressText({ status: 'done', processed: 75, total: 75 }), /הסתיימה.*75/);
+  assert.match(scanProgressText({ status: 'done', processed: 0, total: 0 }), /לא נמצאו/);
+  assert.match(scanProgressText({ status: 'paused', processed: 10, total: 40, error: 'daily_budget' }), /מחר/);
+  assert.match(scanProgressText({ status: 'failed', processed: 3, total: 9, error: 'needs_reconnect' }), /חבר/);
+  assert.match(scanProgressText({ status: 'cancelled', processed: 3, total: 9 }), /בוטלה/);
+  for (const garbage of [null, undefined, {}, { status: 'zzz' }]) assert.equal(typeof scanProgressText(garbage), 'string');
+});
+
+test('rollupItems: for every item, the mails that matched it; invalid indexes are ignored; order is the order of the list', () => {
+  const items = ['INV-1', 'Acme', 'nothing'];
+  const hits = [
+    { gmail_message_id: 'a', matches: [0, 1], subject: 's1' },
+    { gmail_message_id: 'b', matches: [1], subject: 's2' },
+    { gmail_message_id: 'c', matches: [], subject: 's3' },
+    { gmail_message_id: 'd', matches: [7, -1, 1.5, '0', null], subject: 's4' },
+    { gmail_message_id: 'e' },
+  ];
+  const result = rollupItems(items, hits);
+  assert.deepEqual(result.map((r) => [r.item, r.hits.map((h) => h.gmail_message_id)]), [['INV-1', ['a']], ['Acme', ['a', 'b']], ['nothing', []]]);
+  assert.deepEqual(rollupItems([], hits), []);
+  assert.deepEqual(rollupItems(items, null).map((r) => r.hits.length), [0, 0, 0]);
+  assert.deepEqual(rollupItems(null, hits), []);
+});
+
+test('rollupItems: 1000 random results - counts are consistent and nothing throws', () => {
+  const next = rng(5);
+  for (let n = 0; n < 1000; n++) {
+    const items = Array.from({ length: Math.floor(next() * 6) }, (_, i) => 'item' + i);
+    const hits = Array.from({ length: Math.floor(next() * 30) }, (_, i) => ({ gmail_message_id: 'm' + i, matches: Array.from({ length: Math.floor(next() * 5) }, () => Math.floor(next() * 9) - 2) }));
+    const result = rollupItems(items, hits);
+    assert.equal(result.length, items.length);
+    result.forEach((entry, index) => {
+      const expected = hits.filter((h) => h.matches.includes(index)).length;
+      assert.equal(entry.hits.length, expected);
+    });
+  }
+});
+
+test('lastFullMonth: the previous calendar month, in every kind of month', () => {
+  assert.deepEqual(lastFullMonth(new Date(2026, 9, 12)), { from: '2026-09-01', to: '2026-09-30' });
+  assert.deepEqual(lastFullMonth(new Date(2026, 0, 5)), { from: '2025-12-01', to: '2025-12-31' }, 'January looks back into December of the previous year');
+  assert.deepEqual(lastFullMonth(new Date(2028, 2, 1)), { from: '2028-02-01', to: '2028-02-29' }, 'leap February');
+  assert.deepEqual(lastFullMonth(new Date(2026, 2, 31)), { from: '2026-02-01', to: '2026-02-28' });
 });

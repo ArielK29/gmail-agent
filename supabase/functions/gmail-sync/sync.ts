@@ -27,7 +27,7 @@ import {
 } from './logic.ts';
 
 // Gemini (free tier). The optional GEMINI_MODEL secret switches the model without a code change.
-const MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.5-flash-lite';
+export const MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.5-flash-lite';
 export const MAX_EMAILS_PER_DAY = 300; // per member and UTC day: a mailbox flood cannot run up the model bill
 export const MAX_NEW_PER_RUN = 30; // emails summarized per member per run; the rest wait for the next run (nothing is lost)
 export const CHUNK_SIZE = 10; // emails per model call, so the answer never gets cut off
@@ -50,7 +50,7 @@ export interface Connection {
   status: string;
 }
 
-interface EmailInfo {
+export interface EmailInfo {
   id: string;
   from: string;
   subject: string;
@@ -58,11 +58,11 @@ interface EmailInfo {
   text: string;
 }
 
-type TokenResult = { token: string } | { revoked: true } | { failed: string };
+export type TokenResult = { token: string } | { revoked: true } | { failed: string };
 
 // Only Google's "invalid_grant" means the access is really gone (revoked, expired after 7 days in Testing mode, password
 // change). Anything else (network, 5xx, 429) is temporary and must not touch the connection.
-async function getAccessToken(refreshToken: string): Promise<TokenResult> {
+export async function getAccessToken(refreshToken: string): Promise<TokenResult> {
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -79,7 +79,7 @@ async function getAccessToken(refreshToken: string): Promise<TokenResult> {
   return { failed: outcome.reason };
 }
 
-async function gmail(path: string, accessToken: string): Promise<{ status: number; body: any }> {
+export async function gmail(path: string, accessToken: string): Promise<{ status: number; body: any }> {
   const response = await fetch(`${GMAIL}${path}`, { headers: { Authorization: `Bearer ${accessToken}` } });
   return { status: response.status, body: await response.json().catch(() => ({})) };
 }
@@ -110,8 +110,8 @@ function header(message: any, name: string): string {
 
 // A mail can be skipped only when Gmail says it is gone (404, deleted meanwhile). Any other failure (429, 5xx, a network
 // blip) is temporary: the mail must be retried on the next run, never silently dropped.
-type ReadResult = { email: EmailInfo } | { gone: true } | { retry: true };
-async function readEmail(id: string, accessToken: string): Promise<ReadResult> {
+export type ReadResult = { email: EmailInfo } | { gone: true } | { retry: true };
+export async function readEmail(id: string, accessToken: string): Promise<ReadResult> {
   let status: number;
   let body: any;
   try {
@@ -177,11 +177,32 @@ Reply with ONLY a JSON array, one object per email, in the same order: {"id": "<
 
 // Rate limits and server errors of the model are retried a few times with growing pauses. The waiting stays well inside
 // the 60 s budget of a scheduled run (0.5 + 1 + 2 seconds at most per call).
-const callModel = (url: string, init: RequestInit): Promise<Response> =>
+export const callModel = (url: string, init: RequestInit): Promise<Response> =>
   callWithRetry(
     () => fetch(url, init),
     (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   );
+
+// Plain text of one Gemini answer (or throws with the model service's own reason).
+export async function askModel(system: string, userText: string): Promise<string> {
+  const apiKey = Deno.env.get('GEMINI_API_KEY');
+  if (!apiKey) throw new Error('GEMINI_API_KEY is not set');
+  const response = await callModel(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
+    method: 'POST',
+    headers: { 'x-goog-api-key': apiKey, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: system }] },
+      contents: [{ role: 'user', parts: [{ text: userText }] }],
+      generationConfig: { responseMimeType: 'application/json', maxOutputTokens: 4000, temperature: 0.2 },
+    }),
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => null);
+    throw new Error('Gemini: ' + (detail?.error?.message ?? response.status));
+  }
+  const answer = await response.json();
+  return (answer.candidates?.[0]?.content?.parts ?? []).map((part: { text?: string }) => part.text ?? '').join('');
+}
 
 // One model call for a small chunk. HTTP errors throw (the whole run is retried later, nothing is lost). An answer that is
 // not valid JSON gives an empty map, so those emails get the "could not summarize" row instead of blocking the run forever.

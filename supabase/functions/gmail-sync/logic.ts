@@ -115,3 +115,107 @@ export function maxHistoryId(a: string | null | undefined, b: string | null | un
   if (valid(b)) return b;
   return null;
 }
+// ======================= On-demand scan and cross-check (issue #15): pure logic =======================
+export const MAX_SCAN_MAILS = 200; // mails read by one scan
+export const SCAN_SLICE = 30; // mails per call of the "step" action
+const MAX_SCAN_ITEMS = 100;
+const MAX_ITEM_CHARS = 120;
+const MAX_QUERY_CHARS = 200;
+const MAX_PERIOD_DAYS = 365; // end minus start, so at most 366 calendar days (a leap year fits)
+const MAX_ITEMS_IN_QUERY = 20;
+
+// "2026-02-30" is not a day: the text must survive a round trip through a real date.
+export function isRealDay(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(value + 'T00:00:00Z');
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+export function addDays(day: string, days: number): string {
+  const date = new Date(day + 'T00:00:00Z');
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+const dayNumber = (day: string): number => Date.parse(day + 'T00:00:00Z') / 86400000;
+
+// The member's search text goes into a Gmail search. It cannot hide anything (no control or bidi characters), cannot open
+// a group or a sub-query (no parentheses or braces) and cannot leave a quote open.
+export function sanitizeQuery(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const balanced = (text: string) => ((text.match(/"/g) ?? []).length % 2 === 0 ? text : text.replace(/"/g, ''));
+  let text = balanced(stripControls(value).replace(/[(){}]/g, '').replace(/\s+/g, ' ').trim());
+  text = balanced(text.slice(0, MAX_QUERY_CHARS)).trim();
+  return text;
+}
+
+// The list of things to look for: cleaned, no empty entries, no duplicates (any letter case), at most 100.
+export function parseItems(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  const items: string[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'string') continue;
+    const item = stripControls(entry).replace(/\s+/g, ' ').trim().slice(0, MAX_ITEM_CHARS).trim();
+    if (!item || seen.has(item.toLowerCase())) continue;
+    seen.add(item.toLowerCase());
+    items.push(item);
+    if (items.length === MAX_SCAN_ITEMS) break;
+  }
+  return items;
+}
+
+export interface ScanRequest { periodStart: string; periodEnd: string; queryText: string; items: string[] }
+export type ScanValidation = { ok: true; value: ScanRequest } | { ok: false; error: string };
+
+export function validateScanRequest(body: any, today: string): ScanValidation {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return { ok: false, error: 'bad_request' };
+  if (body.consent !== true) return { ok: false, error: 'consent_required' }; // explicit consent, never assumed
+  const { periodStart, periodEnd } = body;
+  if (!isRealDay(periodStart) || !isRealDay(periodEnd) || periodStart < '2000-01-01' || periodStart > periodEnd || periodEnd > today) return { ok: false, error: 'bad_dates' };
+  if (dayNumber(periodEnd) - dayNumber(periodStart) > MAX_PERIOD_DAYS) return { ok: false, error: 'period_too_long' };
+  const queryText = sanitizeQuery(body.query);
+  const items = parseItems(body.items);
+  if (!queryText && items.length === 0) return { ok: false, error: 'nothing_to_search' }; // never read a whole period blindly
+  return { ok: true, value: { periodStart, periodEnd, queryText, items } };
+}
+
+// Gmail's "before:" is exclusive, so the day AFTER the end is used. Without search text the items become the search.
+export function buildGmailQuery(periodStart: string, periodEnd: string, queryText: string, items: string[]): string {
+  const range = `after:${periodStart.replace(/-/g, '/')} before:${addDays(periodEnd, 1).replace(/-/g, '/')}`;
+  if (queryText) return `${range} ${queryText}`;
+  if (items.length === 0) return range;
+  return `${range} {${items.slice(0, MAX_ITEMS_IN_QUERY).map((item) => `"${item.replace(/"/g, '')}"`).join(' ')}}`;
+}
+
+export interface ScanMatch { matches: number[]; summary: string }
+
+// The model's answer for one chunk of mails: which of the member's items each mail mentions, and one sentence about it.
+export function parseMatchAnswer(text: string, knownIds: Set<string>, itemCount: number): Map<string, ScanMatch> {
+  const result = new Map<string, ScanMatch>();
+  const start = text.indexOf('[');
+  const end = text.lastIndexOf(']');
+  let items: unknown = [];
+  try {
+    if (start >= 0 && end > start) items = JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return result;
+  }
+  for (const item of Array.isArray(items) ? items : []) {
+    if (!item || typeof item.id !== 'string' || !knownIds.has(item.id) || result.has(item.id)) continue;
+    const raw: unknown[] = Array.isArray(item.matches) ? item.matches : [];
+    const matches = [...new Set(raw.filter((m): m is number => Number.isInteger(m) && (m as number) >= 0 && (m as number) < itemCount))].sort((a, b) => a - b);
+    result.set(item.id, { matches, summary: cleanText(item.summary, 300) });
+  }
+  return result;
+}
+
+// Exact text matches found without the model (cheap and certain). Items shorter than 3 characters are too vague for this.
+export function localMatches(text: string, items: string[]): number[] {
+  const normal = (value: string) => value.toLowerCase().replace(/\s+/g, ' ');
+  const haystack = normal(text);
+  const found: number[] = [];
+  items.forEach((item, index) => {
+    const needle = normal(item).trim();
+    if (needle.length >= 3 && haystack.includes(needle)) found.push(index);
+  });
+  return found;
+}

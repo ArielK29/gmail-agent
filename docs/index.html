@@ -40,6 +40,14 @@
     .divider { display:flex; align-items:center; gap:12px; color:var(--muted); font-size:14px; margin:16px 0 4px; }
     .divider::before, .divider::after { content:""; flex:1; height:1px; background:var(--line); }
     button.google { width:100%; display:flex; align-items:center; justify-content:center; gap:10px; background:#fff; color:#1f1f1f; }
+    textarea { width:100%; border-radius:12px; border:1px solid var(--line); background:var(--bg); color:var(--text); padding:10px 12px; font-size:16px; font-family:inherit; resize:vertical; }
+    .check { display:flex; gap:10px; align-items:flex-start; min-height:48px; color: var(--text); font-size:14px; margin-top:12px; }
+    .check input { width:24px; height:24px; min-height:0; flex:none; margin-top:2px; }
+    .warn { border:1px solid var(--pink); border-radius:12px; padding:8px 12px; margin-top:12px; font-size:14px; color:var(--text); }
+    .item-result { padding:8px 0; border-top:1px solid var(--line); }
+    .found { color: var(--accent); font-weight:600; }
+    .notfound { color: var(--muted); }
+    details summary { cursor:pointer; min-height:48px; display:flex; align-items:center; }
     .summary-line { margin: 8px 0 4px; }
     .urgent-item { border-inline-start: 3px solid var(--pink); padding: 4px 10px; margin: 6px 0; }
     .footer { text-align:center; font-size:14px; margin-top: 16px; }
@@ -90,6 +98,30 @@
     <div id="summaryNote" class="status"></div>
   </section>
 
+  <section id="scanCard" class="card hidden" aria-labelledby="scanTitle">
+    <strong id="scanTitle">סריקה והצלבה</strong>
+    <p class="status">חפש במיילים ישנים (למשל חודש מסוים) ובדוק אילו מהדברים שברשימה שלך מופיעים בהם.</p>
+    <form id="scanForm" novalidate>
+      <label for="scanFrom">מתאריך</label>
+      <input id="scanFrom" type="date" />
+      <label for="scanTo">עד תאריך</label>
+      <input id="scanTo" type="date" />
+      <label for="scanQuery">טקסט לחיפוש ב-Gmail (אופציונלי)</label>
+      <input id="scanQuery" type="text" maxlength="200" placeholder="למשל: חשבונית" autocomplete="off" />
+      <label for="scanItems">דברים לחפש, אחד בכל שורה (אופציונלי)</label>
+      <textarea id="scanItems" rows="4" placeholder="מספר חשבונית, שם ספק, סכום..."></textarea>
+      <div class="warn" role="note">המיילים שיימצאו (שולח, נושא ועד 1,500 תווים מהתוכן) יישלחו ל-Gemini של Google לצורך ההצלבה. במסלול החינמי הנוכחי Google רשאית להשתמש בתוכן לשיפור המוצרים שלה, ובודקים אנושיים עשויים לקרוא אותו. אל תסרוק מיילים רגישים.</div>
+      <label class="check" for="scanConsent"><input id="scanConsent" type="checkbox" /><span>אני מבין ומסכים לשליחת המיילים שיימצאו ל-Gemini.</span></label>
+      <div class="row">
+        <button id="scanStart" type="submit">סרוק</button>
+        <button id="scanCancel" type="button" class="secondary hidden">בטל סריקה</button>
+      </div>
+    </form>
+    <div id="scanStatus" class="status" role="status"></div>
+    <div id="scanResults"></div>
+    <button id="scanDelete" type="button" class="secondary hidden">מחק את תוצאות הסריקה</button>
+  </section>
+
   <section id="digestCard" class="card hidden">
     <strong>מיילים אחרונים</strong>
     <div class="filters">
@@ -118,7 +150,7 @@
   // config.js defines window.APP_CONFIG = { supabaseUrl, supabaseKey } (the publishable key; never a secret key).
   const { supabaseUrl, supabaseKey } = window.APP_CONFIG;
   const logic = window.AgentLogic; // Hebrew messages and validation, tested in Node (docs/logic.test.js)
-  const LOGIC_FUNCTIONS = ['authMessage', 'validateCredentials', 'problemMessage', 'emptyStateText', 'dailySummary', 'summaryHeadline', 'urgentHeadline', 'safeText'];
+  const LOGIC_FUNCTIONS = ['authMessage', 'validateCredentials', 'problemMessage', 'emptyStateText', 'dailySummary', 'summaryHeadline', 'urgentHeadline', 'safeText', 'scanErrorMessage', 'parseItemsText', 'validateScanForm', 'scanProgressText', 'rollupItems', 'lastFullMonth'];
   if (!logic || LOGIC_FUNCTIONS.some((name) => typeof logic[name] !== 'function')) {
     // An old cached copy of logic.js: ask for a fresh page once instead of showing a broken one.
     let already = false; try { already = Boolean(sessionStorage.getItem('logicReload')); sessionStorage.setItem('logicReload', '1'); } catch { already = true; }
@@ -218,6 +250,130 @@
     $('summaryNote').textContent = summary.incomplete ? 'הסיכום מבוסס על 200 המיילים האחרונים, ייתכן שיש עוד.' : '';
   }
 
+  // ---- On-demand scan and cross-check ----
+  let driving = null; // id of the scan this page is advancing right now
+  const utcToday = () => new Date().toISOString().slice(0, 10);
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const ACTIVE_SCAN = ['queued', 'running'];
+
+  async function callScan(action, extra) {
+    const { data, error } = await db.functions.invoke('gmail-sync', { body: { action, ...extra } });
+    if (error) {
+      let code = '';
+      try { code = (await error.context.json()).error || ''; } catch { code = ''; }
+      const failure = new Error(code || 'unknown'); failure.code = code;
+      throw failure;
+    }
+    return data;
+  }
+
+  function renderScan(scan, hits) {
+    const box = $('scanResults'); box.textContent = '';
+    const active = Boolean(scan) && ACTIVE_SCAN.includes(scan.status);
+    show($('scanCancel'), active); show($('scanDelete'), Boolean(scan) && !active);
+    $('scanStart').disabled = active;
+    $('scanStatus').textContent = scan ? logic.scanProgressText(scan) : '';
+    if (!scan) return;
+    const items = Array.isArray(scan.items) ? scan.items : [];
+    const mailLine = (hit) => {
+      const row = document.createElement('div'); row.className = 'item';
+      const head = document.createElement('div'); head.textContent = `${logic.safeText(hit.from_name) || 'לא ידוע'} · ${logic.safeText(hit.subject) || '(ללא נושא)'}`;
+      const sum = document.createElement('div'); sum.className = 'subject'; sum.textContent = logic.safeText(hit.summary);
+      row.append(head, sum); return row;
+    };
+    if (items.length > 0) {
+      for (const entry of logic.rollupItems(items, hits)) {
+        const block = document.createElement('div'); block.className = 'item-result';
+        const title = document.createElement('div');
+        const label = document.createElement('span'); label.textContent = logic.safeText(entry.item) + ': ';
+        const state = document.createElement('span');
+        state.className = entry.hits.length ? 'found' : 'notfound';
+        state.textContent = entry.hits.length ? (entry.hits.length === 1 ? 'נמצא במייל אחד' : `נמצא ב-${entry.hits.length} מיילים`) : (scan.status === 'done' ? 'לא נמצא' : 'עוד לא נמצא');
+        title.append(label, state); block.append(title);
+        if (entry.hits.length) {
+          const details = document.createElement('details'); const sm = document.createElement('summary'); sm.textContent = 'הצג את המיילים';
+          details.append(sm); for (const hit of entry.hits) details.append(mailLine(hit)); block.append(details);
+        }
+        box.append(block);
+      }
+    } else if (hits.length) {
+      const details = document.createElement('details'); details.open = true; const sm = document.createElement('summary'); sm.textContent = `${hits.length} מיילים נסרקו`;
+      details.append(sm); for (const hit of hits) details.append(mailLine(hit)); box.append(details);
+    }
+  }
+
+  async function showScan(id) {
+    const scanResult = await db.from('gmail_scans').select('id, status, items, total, processed, error').eq('id', id).maybeSingle();
+    const hitsResult = await db.from('gmail_scan_hits').select('gmail_message_id, from_name, subject, received_at, summary, matches').eq('scan_id', id).order('received_at', { ascending: false }).limit(200);
+    if (scanResult.error || hitsResult.error) { $('scanStatus').textContent = LOAD_ERROR; return null; }
+    renderScan(scanResult.data, hitsResult.data || []);
+    return scanResult.data;
+  }
+
+  // Advances the scan slice by slice while the page is open; the scheduler continues it when the page is closed.
+  async function driveScan(id) {
+    if (driving === id) return;
+    driving = id;
+    let stalls = 0;
+    try {
+      for (let round = 0; round < 400 && driving === id; round++) {
+        let result;
+        try { result = await callScan('scan_step', { id }); }
+        catch (e) { if (e.code === 'not_found') break; if (++stalls >= 3) { $('scanStatus').textContent = 'הסריקה נעצרה זמנית. היא תמשיך ברקע.'; break; } await sleep(3000); continue; }
+        await showScan(id);
+        if (['done', 'failed', 'cancelled', 'paused'].includes(result.status)) break;
+        if (result.busy || result.progressed === false) { if (++stalls >= 5) { $('scanStatus').textContent = 'הסריקה ממשיכה ברקע. אפשר לחזור מאוחר יותר.'; break; } await sleep(2500); } else { stalls = 0; }
+      }
+    } finally { if (driving === id) driving = null; }
+  }
+
+  async function loadScan() {
+    const latest = await db.from('gmail_scans').select('id, status').order('created_at', { ascending: false }).limit(1).maybeSingle();
+    if (latest.error) { $('scanStatus').textContent = LOAD_ERROR; return; }
+    if (!latest.data) { renderScan(null, []); return; }
+    const scan = await showScan(latest.data.id);
+    if (scan && ACTIVE_SCAN.includes(scan.status)) driveScan(scan.id);
+  }
+
+  function prepareScanForm() {
+    const month = logic.lastFullMonth(new Date());
+    if (!$('scanFrom').value) $('scanFrom').value = month.from;
+    if (!$('scanTo').value) $('scanTo').value = month.to;
+    $('scanFrom').max = utcToday(); $('scanTo').max = utcToday();
+  }
+
+  $('scanForm').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = { from: $('scanFrom').value, to: $('scanTo').value, query: $('scanQuery').value, itemsText: $('scanItems').value, consent: $('scanConsent').checked };
+    const problem = logic.validateScanForm(form, utcToday());
+    if (problem) { $('scanStatus').textContent = problem; return; }
+    $('scanStart').disabled = true; $('scanStatus').textContent = 'מתחיל...';
+    try {
+      const started = await callScan('scan_start', { consent: true, periodStart: form.from, periodEnd: form.to, query: form.query, items: logic.parseItemsText(form.itemsText) });
+      await showScan(started.id);
+      driveScan(started.id);
+    } catch (e) {
+      $('scanStatus').textContent = logic.scanErrorMessage(e.code);
+      $('scanStart').disabled = false;
+      if (e.code === 'scan_in_progress') loadScan();
+    }
+  });
+  $('scanCancel').onclick = async () => {
+    const latest = await db.from('gmail_scans').select('id').order('created_at', { ascending: false }).limit(1).maybeSingle();
+    if (!latest.data) return;
+    driving = null;
+    try { await callScan('scan_cancel', { id: latest.data.id }); } catch { /* the page shows the real state below */ }
+    await showScan(latest.data.id);
+  };
+  $('scanDelete').onclick = async () => {
+    if (!confirm('למחוק את תוצאות הסריקה? אי אפשר לשחזר.')) return;
+    const latest = await db.from('gmail_scans').select('id').order('created_at', { ascending: false }).limit(1).maybeSingle();
+    if (!latest.data) return;
+    const removed = await db.from('gmail_scans').delete().eq('id', latest.data.id);
+    if (removed.error) { $('scanStatus').textContent = 'לא הצלחנו למחוק. נסה שוב.'; return; }
+    renderScan(null, []); $('scanStatus').textContent = 'התוצאות נמחקו.';
+  };
+  prepareScanForm();
   // What belongs to a signed-in member (mails, summary, filters) is wiped from the page the moment they sign out,
   // so nothing stays in the page for the next person on a shared computer.
   function clearMemberData() {
@@ -225,7 +381,8 @@
     connectionState = { connected: false, expired: false };
     for (const id of ['digest', 'summaryUrgent', 'summaryHeadline', 'summaryCategories', 'summaryNote', 'digestCount', 'connection']) $(id).textContent = '';
     $('search').value = ''; $('filterCategory').value = ''; $('filterUrgency').value = '';
-    show($('summaryCard'), false);
+    show($('summaryCard'), false); show($('scanCard'), false);
+    driving = null; $('scanResults').textContent = ''; $('scanStatus').textContent = ''; $('scanQuery').value = ''; $('scanItems').value = ''; $('scanConsent').checked = false;
   }
 
   let refreshSeq = 0;
@@ -260,6 +417,8 @@
       allRows = digestResult.data || [];
       renderSummary();
       renderDigest();
+      show($('scanCard'), connected && !expired);
+      if (connected && !expired) loadScan(); else { driving = null; }
     } catch {
       // A network failure while loading: say so, never leave the page silently half empty.
       if (mine === refreshSeq) { notify(LOAD_ERROR); show($('summaryCard'), false); }

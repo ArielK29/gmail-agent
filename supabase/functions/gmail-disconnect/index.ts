@@ -31,6 +31,12 @@ Deno.serve(async (req: Request) => {
     console.error('disconnect: could not delete the digest');
     return reply(500, { error: 'delete_failed' });
   }
+  // 1b. the results of on-demand scans (their rows go with them): they are mail-derived data too
+  const scans = await admin.from('gmail_scans').delete().eq('user_id', userId);
+  if (scans.error) {
+    console.error('disconnect: could not delete the scans');
+    return reply(500, { error: 'delete_failed' });
+  }
   // 2. the connection
   const removed = await admin.from('gmail_connections').delete().eq('user_id', userId);
   if (removed.error) {

@@ -6,6 +6,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { syncOne, type Connection } from './sync.ts';
 import { isThrottled } from './logic.ts';
+import { cancelScan, startScan, stepScan, tickScans } from './scan.ts';
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -32,6 +33,28 @@ Deno.serve(async (req: Request) => {
   const { data: secret } = await admin.from('agent_secrets').select('value').eq('name', 'cron').maybeSingle();
   let query = admin.from('gmail_connections').select('user_id, refresh_token, history_id, last_checked_at, last_attempt_at, status');
   const scheduled = Boolean(secret) && token === secret!.value;
+  // On-demand scan (issue #15). One function, so the code for Gmail and the model is shared with the sync.
+  const body = await req.json().catch(() => ({}));
+  const action = typeof body?.action === 'string' ? body.action : '';
+  if (action.startsWith('scan_')) {
+    if (action === 'scan_tick') return scheduled ? reply(200, await tickScans(admin)) : reply(401, { error: 'not allowed' });
+    if (scheduled) return reply(400, { error: 'member_required' });
+    const { data: who } = await admin.auth.getUser(token);
+    if (!who?.user) return reply(401, { error: 'not signed in' });
+    if (action === 'scan_start') {
+      const started = await startScan(admin, who.user.id, body);
+      return reply(started.status, started.body);
+    }
+    if (action === 'scan_step') {
+      const stepped = await stepScan(admin, String(body.id ?? ''), who.user.id);
+      return stepped ? reply(200, stepped as unknown as Record<string, unknown>) : reply(404, { error: 'not_found' });
+    }
+    if (action === 'scan_cancel') {
+      const cancelled = await cancelScan(admin, who.user.id, body.id);
+      return reply(cancelled.status, cancelled.body);
+    }
+    return reply(400, { error: 'unknown_action' });
+  }
   if (scheduled) {
     // Scheduled run: every member whose connection is alive.
     // Ordered by the last ATTEMPT, so a member whose runs keep failing cannot hold the front of the line forever.

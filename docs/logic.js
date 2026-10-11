@@ -104,6 +104,88 @@
     return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F\u200B-\u200D\u2060\u202A-\u202E\u2066-\u2069\uFEFF]/g, '');
   }
 
-  return { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText };
+  // ---- On-demand scan and cross-check (issue #15) ----
+  const SCAN_ERRORS = {
+    consent_required: 'כדי לסרוק צריך לסמן את ההסכמה.',
+    bad_dates: 'התאריכים לא תקינים. ההתחלה חייבת להיות לפני הסוף, והסוף לא יכול להיות בעתיד.',
+    period_too_long: 'אפשר לסרוק עד שנה בכל פעם.',
+    nothing_to_search: 'כתוב מה לחפש: טקסט לחיפוש, או רשימת דברים (אחד בכל שורה).',
+    not_connected: 'Gmail עדיין לא מחובר. חבר אותו ואז נסה שוב.',
+    needs_reconnect: 'החיבור ל-Gmail פג. חבר מחדש ואז נסה שוב.',
+    scan_in_progress: 'כבר רצה סריקה. חכה שתסתיים, או בטל אותה.',
+    daily_scan_limit: 'אפשר להריץ עד 3 סריקות ביום. נסה שוב מחר.',
+    invalid_query: 'Gmail לא הבין את החיפוש. נסה לנסח אותו אחרת.',
+    daily_budget: 'הגעת למכסה היומית של המיילים. הסריקה תמשיך מחר.',
+    could_not_start: 'לא הצלחנו להתחיל את הסריקה. נסה שוב.',
+    bad_request: 'הבקשה לא תקינה. רענן את הדף ונסה שוב.',
+    not_found: 'הסריקה לא נמצאה.',
+  };
+  function scanErrorMessage(code) {
+    return Object.prototype.hasOwnProperty.call(SCAN_ERRORS, code) ? SCAN_ERRORS[code] : GENERIC;
+  }
+
+  // One item per line; the same cleaning as the server (control and bidi characters out, no duplicates, 100 items, 120 characters).
+  function parseItemsText(text) {
+    if (typeof text !== 'string') return [];
+    const seen = new Set();
+    const items = [];
+    for (const line of text.split(/\r?\n/)) {
+      const item = safeText(line).replace(/\s+/g, ' ').trim().slice(0, 120).trim();
+      if (!item || seen.has(item.toLowerCase())) continue;
+      seen.add(item.toLowerCase());
+      items.push(item);
+      if (items.length === 100) break;
+    }
+    return items;
+  }
+
+  const isRealDay = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) === value;
+  const dayNumber = (day) => Date.parse(day + 'T00:00:00Z') / 86400000;
+
+  // The same rules as the server, so the member hears about a mistake before anything is sent. Returns a Hebrew sentence or null.
+  function validateScanForm(form, today) {
+    if (!form || typeof form !== 'object') return SCAN_ERRORS.bad_request;
+    if (form.consent !== true) return SCAN_ERRORS.consent_required;
+    if (!isRealDay(form.from) || !isRealDay(form.to) || form.from < '2000-01-01' || form.from > form.to || form.to > today) return SCAN_ERRORS.bad_dates;
+    if (dayNumber(form.to) - dayNumber(form.from) > 365) return SCAN_ERRORS.period_too_long;
+    const hasQuery = typeof form.query === 'string' && safeText(form.query).replace(/[(){}\s]/g, '') !== '';
+    if (!hasQuery && parseItemsText(form.itemsText).length === 0) return SCAN_ERRORS.nothing_to_search;
+    return null;
+  }
+
+  function scanProgressText(scan) {
+    if (!scan || typeof scan !== 'object') return 'אין סריקה.';
+    const done = Number(scan.processed) || 0;
+    const total = Number(scan.total) || 0;
+    switch (scan.status) {
+      case 'queued': return 'הסריקה מתחילה...';
+      case 'running': return total > 0 ? `נסרקו ${done} מתוך ${total} מיילים...` : 'מחפש מיילים...';
+      case 'paused': return scan.error === 'daily_budget' ? `${SCAN_ERRORS.daily_budget} (נסרקו ${done} מתוך ${total}).` : `הסריקה הושהתה (נסרקו ${done} מתוך ${total}).`;
+      case 'done': return total === 0 ? 'הסריקה הסתיימה: לא נמצאו מיילים שמתאימים.' : `הסריקה הסתיימה: נסרקו ${total} מיילים.`;
+      case 'cancelled': return 'הסריקה בוטלה.';
+      case 'failed': return scan.error === 'needs_reconnect' ? 'הסריקה נעצרה: החיבור ל-Gmail פג. חבר מחדש.' : scan.error === 'invalid_query' ? SCAN_ERRORS.invalid_query : 'הסריקה נכשלה. נסה שוב.';
+      default: return 'אין סריקה.';
+    }
+  }
+
+  // For every item of the member's list: the scanned mails that matched it (matches holds positions in the list).
+  function rollupItems(items, hits) {
+    if (!Array.isArray(items)) return [];
+    const rows = Array.isArray(hits) ? hits : [];
+    return items.map((item, index) => ({
+      item,
+      hits: rows.filter((hit) => hit && Array.isArray(hit.matches) && hit.matches.some((m) => m === index)),
+    }));
+  }
+
+  const pad = (n) => String(n).padStart(2, '0');
+  // The previous calendar month as a pair of local days (the default period of the scan form).
+  function lastFullMonth(now) {
+    const first = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const last = new Date(now.getFullYear(), now.getMonth(), 0);
+    const fmt = (date) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    return { from: fmt(first), to: fmt(last) };
+  }
+  return { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth };
 });
 
