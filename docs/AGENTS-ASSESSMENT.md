@@ -1,0 +1,18 @@
+# The four agents from the post: honest assessment (2026-10-12)
+
+"The app" can mean two things, so both are rated: **DuoFit** (the fitness-buddy app for end users) and the **Gmail agent** (the course app). The percentages are my judgment, not measurements: "contribution" = how much of the app's value or of getting it to launch the agent would add; "built" = share of the planned v1 features that exist and are tested.
+
+| # | Agent | Contribution to DuoFit | Contribution to the Gmail agent | Built so far | Decision | Why |
+|---|---|---|---|---|---|---|
+| 1 | Morning briefing: what did I miss (mails, calendar, tasks, what changed, whom I forgot to answer, deadlines, what really needs me) | **10%** (only as a developer digest: CI, issues, advisors, which GitHub already mostly shows) | **85%** (it is the natural next layer of this product) | **30%**: new in the last 24 h and urgent mails exist (daily summary card); missing: who I forgot to answer, approaching deadlines, calendar and tasks (new Google permissions), "since my last visit", delivery every morning (#14) | **Build, inside the Gmail agent** (issue #16): replies and deadlines from Gmail alone, no new permission | Real, feasible with data we already read; calendar and tasks need new scopes and Google verification, so they wait |
+| 2 | Second brain (documents, meeting transcripts, mails, ideas, fed automatically, asked in chat) | **10%** (the project already has issues, docs, tests and my memory notes; a formal brain adds little before launch) | **15%** | **5%**: project docs and notes exist, nothing feeds or searches them automatically | **Do not build now** (issue #17, deferred) | No transcripts or document flow exist yet, it is large, and it would duplicate what GitHub, `docs/` and the memory notes already do. Revisit after launch with real feedback and support data |
+| 3 | Meetings and proposals (prepare before, transcribe after, decisions and tasks) | **5%** (no meetings pipeline in DuoFit today) | **20%** (preparing from mails about the attendees) | **0%** | **Do not build now** (issue #18, deferred) | Needs calendar access plus a recording and transcription tool that you do not have, and you have no regular meetings or proposals today |
+| 4 | Instagram analysis (every post and video, upgrade tips, growth roadmap) | **5% today, about 20% after launch** (user acquisition for a fitness-buddy app) | **0%** | **0%** | **Do not build now** (issue #19, deferred to launch) | Needs an Instagram business account and an app approved by Meta (Graph API) in your name; scraping is against their terms; before launch there is no audience to analyze |
+
+## What this means
+- Only agent 1 fits what we are building, and only as an extension of the Gmail agent.
+- None of the four is a feature that DuoFit's users would see. For DuoFit's launch the real blockers are the domain, the store accounts, the device test and the legal review (issues #88, #12, #11, #96).
+- The Gmail agent itself: MVP code **100%** (sign-in, connect, automatic summaries, daily summary, scan and cross-check, disconnect and delete). Ready for real customers: about **70%**; missing: Google sign-in secret (#7), the paid Gemini decision (#9), test users (#8), Google verification (needs the domain, #12).
+
+## Steps used for each agent that is built (the same as for the Gmail agent)
+Plan with edge cases and current docs, corrections table, decisions, checkpoints, tests first, fakes for Google, Gemini and the database, chaos simulation, mutation checks, permission test, deploy, outside-in probes, browser check at 375 px, deep review, TESTING.md, issue closed with evidence.
