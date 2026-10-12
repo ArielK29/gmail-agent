@@ -1,0 +1,5 @@
+# Read-only: customers, meters and open checkout sessions of the Polar SANDBOX organization (changes nothing; never prints secrets).
+# No double quotes inside the prompt (Windows PowerShell 5.1 breaks them when calling a program).
+$claude = 'C:\Users\Korman\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude-code\2.1.295\d2e29494ec83\claude.exe'
+$prompt = 'Read only, change nothing, never print a token or a secret. For the Polar SANDBOX organization duofit-polar report briefly: (1) how many customers exist and, for each, whether it has any order or subscription (e-mail masked to the first 2 letters); (2) how many checkout sessions exist and their status (open, confirmed, expired) if the tools can list them; (3) how many meters exist; (4) one sentence from the Polar API descriptions you can read: when is a customer created (at checkout creation, at checkout confirmation, or only when explicitly created through the API)?'
+& $claude -p $prompt --allowedTools 'mcp__polar-sandbox'
