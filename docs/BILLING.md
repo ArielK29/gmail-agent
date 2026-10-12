@@ -58,3 +58,8 @@ Before turning payments on for real: every member who should keep Pro must have 
 
 ## Tests
 `docs/TESTING.md`, section "Subscriptions with Polar". Run everything: see the command at the top of that file.
+
+## Decisions about the Polar organization (2026-10-13)
+- Organization name `Gmail Agent`, slug `gmail-agent` (or `gmail-agent-ariel` if taken), type Individual, software / SaaS, pricing model Subscription.
+- **Default payment currency: Israeli New Shekel (ILS)**, chosen by the owner (not US Dollar). Suggested Pro price: about 19 ILS per month (roughly 5 USD); the price is set in Polar, never in the code.
+- The Polar SANDBOX MCP server (`polar-sandbox`, https://mcp.polar.sh/mcp/polar-sandbox) is installed in the owner's Claude Code user configuration and in the project file `.mcp.json`. It needs the owner's one-time OAuth sign-in (`/mcp`). The production server is deliberately not installed.
