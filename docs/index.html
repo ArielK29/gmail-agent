@@ -86,6 +86,8 @@
     <div id="digestEmailBox" class="hidden">
       <label class="check"><input type="checkbox" id="digestEmail"> שלח לי את הבריפינג למייל כל בוקר</label>
       <div id="digestEmailStatus" class="status"></div>
+      <button id="digestTest" type="button" class="secondary">שלח לי מייל בדיקה עכשיו</button>
+      <div id="digestTestStatus" class="status"></div>
     </div>
     <div class="row">
       <button id="connect">חבר את Gmail</button>
@@ -259,12 +261,33 @@
   function renderDigestEmail(connection) {
     show($('digestEmailBox'), Boolean(connection));
     digestUser = connection ? connection.user_id : null;
-    if (!connection) { $('digestEmail').checked = false; $('digestEmailStatus').textContent = ''; return; }
+    if (!connection) { $('digestEmail').checked = false; $('digestEmailStatus').textContent = ''; $('digestTestStatus').textContent = ''; return; }
     $('digestEmail').checked = connection.digest_email === true;
     $('digestEmailStatus').textContent = connection.digest_email !== true ? ''
       : (connection.digest_failures || 0) >= 3 ? 'השליחה נעצרה אחרי כמה כשלונות. בטל את הסימון וסמן שוב כדי לנסות מחדש.'
       : `יישלח לכתובת ${connection.google_email || 'Gmail שלך'} בין 07:00 ל-12:00, ורק אם יש מה להראות.${connection.digest_last_sent_on ? ' נשלח לאחרונה: ' + connection.digest_last_sent_on + '.' : ''}`;
   }
+  // A test mail to the member's own address, on demand (once per 10 minutes). The server says why when it cannot.
+  const TEST_MAIL_TEXTS = {
+    too_soon: 'שלחנו מייל בדיקה לפני רגע. נסה שוב בעוד כמה דקות.',
+    not_configured: 'שירות שליחת המיילים עדיין לא מחובר, לכן אי אפשר לשלוח עכשיו.',
+    send_failed: 'שירות שליחת המיילים סירב. נסה שוב בעוד רגע.',
+    needs_reconnect: 'החיבור ל-Gmail פג. חבר מחדש ונסה שוב.',
+    not_connected: 'Gmail עדיין לא מחובר.',
+    no_address: 'לא מצאנו כתובת מייל תקינה לחיבור.',
+  };
+  $('digestTest').addEventListener('click', async () => {
+    const button = $('digestTest');
+    button.disabled = true; $('digestTestStatus').textContent = 'שולח...';
+    try {
+      await callScan('digest_test', {});
+      $('digestTestStatus').textContent = 'נשלח. בדוק את תיבת המייל שלך (גם את הספאם).';
+    } catch (error) {
+      $('digestTestStatus').textContent = TEST_MAIL_TEXTS[error && error.code] || 'לא הצלחנו לשלוח. נסה שוב.';
+    }
+    button.disabled = false;
+  });
+
   $('digestEmail').addEventListener('change', async () => {
     const box = $('digestEmail');
     const wanted = box.checked;

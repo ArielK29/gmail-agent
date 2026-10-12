@@ -5,7 +5,7 @@
 // sends nothing; a failure gives the day back so it is tried again, and after MAX_FAILURES permanent refusals in a row the
 // agent stops trying; without a configured sending service nothing happens at all (no failure is counted).
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
-import { MAX_FAILURES, buildBrief, composeEmail, isDueForDigest, localParts, safeTz } from './briefing.ts';
+import { MAX_FAILURES, buildBrief, composeEmail, composeTestEmail, isDeliverable, isDueForDigest, localParts, safeTz } from './briefing.ts';
 
 export type SendResult = { ok: true } | { skip: 'not_configured' } | { fail: 'transient' | 'permanent' };
 export type Sender = (message: { to: string; subject: string; html: string; text: string; key: string }) => Promise<SendResult>;
@@ -74,4 +74,40 @@ export async function sendDigests(admin: SupabaseClient, nowMs: number, send: Se
     }
   }
   return run;
+}
+
+// ---------------------------------------------------------------- "send me a test e-mail now"
+export const TEST_COOLDOWN_MS = 10 * 60 * 1000;
+
+// Called with the member's own session. Sends the briefing (or a short note) to the member's own Google address, at most once
+// per 10 minutes (the time is claimed with one conditional update, so a double click or two tabs send once).
+export async function sendTestDigest(admin: SupabaseClient, userId: string, nowMs: number, send: Sender = sendEmail): Promise<{ status: number; body: Record<string, unknown> }> {
+  const { data: connection } = await admin.from('gmail_connections').select('user_id, google_email, status, digest_tz, digest_test_at').eq('user_id', userId).maybeSingle();
+  if (!connection) return { status: 409, body: { error: 'not_connected' } };
+  if (connection.status === 'needs_reconnect') return { status: 409, body: { error: 'needs_reconnect' } };
+  if (typeof connection.google_email !== 'string' || !isDeliverable(connection.google_email)) return { status: 409, body: { error: 'no_address' } };
+  const before = connection.digest_test_at ?? null;
+  const stamp = new Date(nowMs).toISOString();
+  const claim = await admin
+    .from('gmail_connections')
+    .update({ digest_test_at: stamp })
+    .eq('user_id', userId)
+    .or(`digest_test_at.is.null,digest_test_at.lt.${new Date(nowMs - TEST_COOLDOWN_MS).toISOString()}`)
+    .select('user_id');
+  if ((claim.data ?? []).length !== 1) return { status: 429, body: { error: 'too_soon' } };
+  const revert = async () => { try { await admin.from('gmail_connections').update({ digest_test_at: before }).eq('user_id', userId).eq('digest_test_at', stamp); } catch { /* the cooldown simply runs out */ } };
+  try {
+    const tz = safeTz(connection.digest_tz);
+    const mails = await admin.from('gmail_digest').select('from_name, subject, category, received_at, due_date, needs_reply, handled_at').eq('user_id', userId).order('received_at', { ascending: false }).limit(200);
+    const agenda = await admin.from('gmail_agenda').select('kind, title, starts_at, ends_at, all_day, day').eq('user_id', userId).limit(200);
+    if (mails.error || agenda.error) { await revert(); return { status: 500, body: { error: 'read_failed' } }; }
+    const composed = composeTestEmail(buildBrief(mails.data, agenda.data, nowMs, tz));
+    const result = await send({ to: connection.google_email, subject: composed.subject, html: composed.html, text: composed.text, key: `digest-test-${userId}-${nowMs}` });
+    if ('ok' in result) return { status: 200, body: { ok: true } };
+    await revert();
+    return 'skip' in result ? { status: 503, body: { error: 'not_configured' } } : { status: 502, body: { error: 'send_failed' } };
+  } catch {
+    await revert();
+    return { status: 500, body: { error: 'failed' } };
+  }
 }

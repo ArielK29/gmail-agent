@@ -7,7 +7,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2';
 import { syncOne, type Connection } from './sync.ts';
 import { isThrottled } from './logic.ts';
 import { cancelScan, startScan, stepScan, tickScans } from './scan.ts';
-import { sendDigests, type DigestRun } from './digest.ts';
+import { sendDigests, sendTestDigest, type DigestRun } from './digest.ts';
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -55,6 +55,13 @@ Deno.serve(async (req: Request) => {
       return reply(cancelled.status, cancelled.body);
     }
     return reply(400, { error: 'unknown_action' });
+  }
+  if (action === 'digest_test') {
+    if (scheduled) return reply(400, { error: 'member_required' });
+    const { data: who } = await admin.auth.getUser(token);
+    if (!who?.user) return reply(401, { error: 'not signed in' });
+    const tested = await sendTestDigest(admin, who.user.id, Date.now());
+    return reply(tested.status, tested.body);
   }
   if (scheduled) {
     // Scheduled run: every member whose connection is alive.

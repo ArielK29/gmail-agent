@@ -238,3 +238,14 @@ Deployed: gmail-sync v17 (`briefing.ts`, `digest.ts`, scheduled run calls `sendD
 Bugs found by these tests while building it: the supabase-js query builder has no `.catch`, so a cleanup written with `.catch()` would have thrown inside the error path (fixed with try/catch); the briefing builder threw on a NaN clock (now falls back to the real time); two of my own test expectations were wrong (the clock-change hour, and mails too old in the healing phase).
 
 Not verified: a real e-mail leaving through Resend. That needs a Resend account and its API key set as the Supabase secret `RESEND_API_KEY` (owner), and for customers other than the owner a verified sending domain (#88).
+### "Send me a test e-mail now" (issue #14, 2026-10-13)
+A button next to the e-mail switch. It sends the real briefing (marked as a test), or a short note when the briefing is empty, to the member's own Google address at any hour, at most once per 10 minutes (claimed with one conditional update). It exists so the e-mail can be checked as soon as the sending service is connected, without waiting for the next morning. Deployed: gmail-sync v18, migration 015 (`digest_test_at`, written only by the function).
+
+| Layer | Test | Result |
+|---|---|---|
+| `digest.test.ts` (22 tests now) | goes to the member's own address; empty briefing still gets a note; two clicks at once send once; allowed again after 10 minutes; not configured, a failed send, a failed read and a crash all give the time back and answer with the reason; not connected, needs reconnect and a bad address are refused before anything is sent; another member's cooldown untouched | pass |
+| Mutation check | cooldown condition removed, no give-back after a failure, wrong recipient, address check removed | each made a test fail; restored |
+| Outside-in on the deployed function | the scheduler token is refused for this action (400 member_required), a garbage token gets 401 | as designed |
+| Whole suite | `node --test` on all eight files | 182 pass |
+
+Not verified: a real mail leaving through Resend (needs the account and `RESEND_API_KEY`, owner).

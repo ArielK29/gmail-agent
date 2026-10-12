@@ -7,7 +7,7 @@ import { makeDb, rng, type Row } from './testkit.ts';
 
 (globalThis as any).Deno = { env: { get: (_name: string) => undefined } };
 const { safeTz, localParts, isDueForDigest, isDeliverable, buildBrief, composeEmail, escapeHtml, DEFAULT_TZ, MAX_FAILURES } = await import('./briefing.ts');
-const { sendDigests, sendEmail } = await import('./digest.ts');
+const { sendDigests, sendEmail, sendTestDigest, TEST_COOLDOWN_MS } = await import('./digest.ts');
 const page = createRequire(import.meta.url)('../../../docs/logic.js');
 
 const NOW = Date.parse('2026-10-12T05:30:00Z'); // 08:30 in Jerusalem (UTC+3), 01:30 in New York
@@ -301,4 +301,58 @@ test('chaos: random failures, overlapping runs and a jumping clock: never more t
     for (const m of members.filter((x) => x.digest_email)) assert.ok(todayKeys.some((k) => k.startsWith(`digest-${m.user_id}-`)), `seed ${seed}: ${m.user_id} got no mail after healing`);
     assert.equal(new Set(sentKeys).size, sentKeys.length);
   }
+});
+
+// ---------------------------------------------------------------- "send me a test e-mail now"
+const testWorld = (connection: Row = {}, mails: Row[] = [mailRow()]) => world({ digest_email: false, digest_tz: null, ...connection }, mails);
+
+test('test mail: goes to the member\'s own address, with the real briefing marked as a test; an empty briefing still gets a short note', async () => {
+  const db = testWorld();
+  const s = makeSender();
+  assert.deepEqual(await sendTestDigest(db as any, 'u1', NOW, s.send), { status: 200, body: { ok: true } });
+  assert.equal(s.sent[0].to, 'dana@example.com');
+  assert.ok(s.sent[0].subject.startsWith('בדיקה: סיכום הבוקר'));
+  const empty = testWorld({}, []);
+  const s2 = makeSender();
+  assert.equal((await sendTestDigest(empty as any, 'u1', NOW, s2.send)).status, 200);
+  assert.equal(s2.sent[0].subject, 'בדיקה: מייל הבוקר עובד');
+});
+
+test('test mail: once per 10 minutes (two clicks at once send once), then allowed again', async () => {
+  const db = testWorld();
+  const s = makeSender();
+  const both = await Promise.all([sendTestDigest(db as any, 'u1', NOW, s.send), sendTestDigest(db as any, 'u1', NOW, s.send)]);
+  assert.deepEqual(both.map((r) => r.status).sort(), [200, 429]);
+  assert.equal(s.sent.length, 1);
+  assert.equal((await sendTestDigest(db as any, 'u1', NOW + TEST_COOLDOWN_MS - 1000, s.send)).status, 429);
+  assert.equal((await sendTestDigest(db as any, 'u1', NOW + TEST_COOLDOWN_MS + 1000, s.send)).status, 200);
+  assert.equal(s.sent.length, 2);
+  assert.notEqual(s.sent[0].key, s.sent[1].key);
+});
+
+test('test mail: not configured, a failed send and a failed read all give the time back (the member can try again at once) and say why', async () => {
+  const db = testWorld();
+  assert.deepEqual(await sendTestDigest(db as any, 'u1', NOW, makeSender(() => 'skip').send), { status: 503, body: { error: 'not_configured' } });
+  assert.equal(conn(db).digest_test_at, null);
+  assert.deepEqual(await sendTestDigest(db as any, 'u1', NOW, makeSender(() => 'transient').send), { status: 502, body: { error: 'send_failed' } });
+  assert.deepEqual(await sendTestDigest(db as any, 'u1', NOW, makeSender(() => 'permanent').send), { status: 502, body: { error: 'send_failed' } });
+  db.failing['gmail_digest.select'] = true;
+  assert.deepEqual(await sendTestDigest(db as any, 'u1', NOW, makeSender().send), { status: 500, body: { error: 'read_failed' } });
+  delete db.failing['gmail_digest.select'];
+  const crash = async () => { throw new Error('boom'); };
+  assert.equal((await sendTestDigest(db as any, 'u1', NOW, crash as any)).status, 500);
+  assert.equal(conn(db).digest_test_at, null);
+  assert.equal((await sendTestDigest(db as any, 'u1', NOW, makeSender().send)).status, 200);
+});
+
+test('test mail: not connected, needs reconnect and a bad address are refused before anything is sent; another member\'s time is not touched', async () => {
+  const s = makeSender();
+  assert.equal((await sendTestDigest(testWorld() as any, 'nobody', NOW, s.send)).status, 409);
+  assert.deepEqual((await sendTestDigest(testWorld({ status: 'needs_reconnect' }) as any, 'u1', NOW, s.send)).body, { error: 'needs_reconnect' });
+  assert.deepEqual((await sendTestDigest(testWorld({ google_email: 'a@b.c, d@e.f' }) as any, 'u1', NOW, s.send)).body, { error: 'no_address' });
+  assert.equal(s.calls, 0);
+  const db = makeDb({ gmail_connections: [{ user_id: 'u1', ...base(), digest_test_at: null }, { user_id: 'u2', ...base({ google_email: 'other@example.com' }), digest_test_at: null }], gmail_digest: [], gmail_agenda: [] });
+  await sendTestDigest(db as any, 'u1', NOW, s.send);
+  assert.equal(conn(db, 'u2').digest_test_at, null);
+  assert.deepEqual(s.sent.map((m) => m.to), ['dana@example.com']);
 });

@@ -154,3 +154,13 @@ export function composeEmail(brief: Brief): Composed | null {
     .join('')}<p style="color:#777;font-size:12px;margin-top:20px">${escapeHtml(footer)}</p></div>`;
   return { subject, text, html, count };
 }
+
+
+// A test mail the member asked for ("send me a test e-mail now"): the real briefing when there is one, otherwise a short note.
+export function composeTestEmail(brief: Brief): Composed {
+  const note = 'זהו מייל בדיקה שביקשת. כך ייראה מייל הבוקר.';
+  const real = composeEmail(brief);
+  if (real) return { ...real, subject: `בדיקה: ${real.subject}`, text: `${note}\n\n${real.text}`, html: `<div dir="rtl" style="font-family:Arial,sans-serif"><p>${escapeHtml(note)}</p></div>${real.html}` };
+  const none = 'כרגע אין מועדים, משימות, אירועים או מיילים שממתינים לתשובה, ולכן ביום רגיל לא היית מקבל מייל.';
+  return { subject: 'בדיקה: מייל הבוקר עובד', text: `${note}\n${none}`, html: `<div dir="rtl" style="font-family:Arial,sans-serif;line-height:1.5"><p>${escapeHtml(note)}</p><p>${escapeHtml(none)}</p></div>`, count: 0 };
+}
