@@ -41,6 +41,20 @@ test('checkout: asks Polar for the one product we chose, tagged with the member\
   assert.equal(withQuery.calls[0].body.success_url, 'https://x.example/app?lang=he&billing=success');
 });
 
+test('checkout: secrets pasted with a trailing newline or spaces still work (found in the first sandbox payment test: fetch throws on such a header)', async () => {
+  const strict = (async (url: any, init: any) => {
+    if (/[\r\n]/.test(init.headers.Authorization) || /\s$/.test(init.headers.Authorization)) throw new TypeError('invalid header value'); // like a real fetch
+    return new Response(JSON.stringify({ url: 'https://sandbox.polar.sh/checkout/abc', productSeen: JSON.parse(init.body).products[0] }), { status: 201 });
+  }) as typeof fetch;
+  const dirty = { ...ENV, token: `${ENV.token}\n`, productId: ' prod_pro\r\n', appUrl: 'https://arielk29.github.io/gmail-agent/ ' };
+  const answer = await createCheckout(world() as any, user, 'pro', dirty, NOW, strict);
+  assert.deepEqual(answer, { status: 200, body: { url: 'https://sandbox.polar.sh/checkout/abc' } });
+  const portal = await createPortal(world([{ user_id: U, source: 'polar', polar_customer_id: 'cus_1' }]) as any, user, dirty, (async () => new Response(JSON.stringify({ customer_portal_url: 'https://sandbox.polar.sh/portal/x' }), { status: 201 })) as typeof fetch);
+  assert.equal(portal.status, 200);
+  // a value that is only whitespace counts as not configured
+  assert.equal((await createCheckout(world() as any, user, 'pro', { ...ENV, token: ' \n' }, NOW, strict)).status, 503);
+});
+
 test('checkout: the member cannot choose the product, the price or anybody else\'s id', async () => {
   for (const plan of ['free', 'enterprise', '', null, undefined, { id: 'prod_other' }, ['pro'], 'PRO']) {
     const polar = fakePolar();

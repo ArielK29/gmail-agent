@@ -163,6 +163,15 @@ test('handler: forged, unsigned, expired and unconfigured messages change nothin
   assert.deepEqual([empty.tables.subscriptions.length, empty.tables.polar_events.length], [0, 0], 'a rejected message leaves no trace at all');
 });
 
+test('handler: a secret pasted with a trailing newline or spaces still verifies real messages (otherwise every payment would be refused)', async () => {
+  for (const dirty of [SECRET + '\n', ' ' + SECRET + ' ', SECRET + '\r\n']) {
+    const db = makeWorld();
+    const answer = await send(db, subscriptionEvent(), { secret: dirty, signWith: SECRET });
+    assert.deepEqual(answer, { status: 200, body: { applied: true } }, JSON.stringify(dirty));
+    assert.equal(isPro(subOf(db), NOW), true);
+  }
+});
+
 test('handler: bad JSON with a good signature is a 400 and leaves no trace', async () => {
   const db = makeWorld();
   const answer = await handleWebhook(db as any, signed(SECRET, '{not json'), SECRET, NOW);

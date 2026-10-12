@@ -19,8 +19,9 @@ export interface WebhookAnswer { status: number; body: Record<string, unknown> }
 const EVENT_KEEP_MS = 30 * 24 * 3600 * 1000;
 export const MAX_BODY_BYTES = 256 * 1024; // a real subscription message is a few kilobytes; nothing bigger is even read
 
-export async function handleWebhook(admin: SupabaseClient, request: WebhookRequest, secret: string | undefined, nowMs = Date.now()): Promise<WebhookAnswer> {
-  if (!secret || secret.trim() === '') return { status: 503, body: { error: 'not_configured' } };
+export async function handleWebhook(admin: SupabaseClient, request: WebhookRequest, rawSecret: string | undefined, nowMs = Date.now()): Promise<WebhookAnswer> {
+  const secret = rawSecret?.trim(); // a secret pasted into a dashboard may carry a trailing newline or space, which would make every signature fail
+  if (!secret) return { status: 503, body: { error: 'not_configured' } };
   if (request.rawBody.length > MAX_BODY_BYTES) return { status: 413, body: { error: 'too_large' } };
   if (!(await verifySignature(secret, request.headers, request.rawBody, nowMs))) return { status: 403, body: { error: 'invalid_signature' } };
   let payload: any;

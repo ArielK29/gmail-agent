@@ -11,6 +11,9 @@ type Fetch = typeof fetch;
 // Sandbox is the default on purpose: real money needs a deliberate POLAR_SERVER=production.
 export const polarBase = (server: string | undefined): string => (server === 'production' ? 'https://api.polar.sh/v1' : 'https://sandbox-api.polar.sh/v1');
 const configured = (env: BillingEnv): boolean => Boolean(env.token && env.productId && env.appUrl && /^https:\/\//.test(env.appUrl));
+// A secret pasted into a dashboard often carries a trailing newline or space; as an HTTP header value it makes `fetch` throw
+// (found in the first sandbox payment test, 2026-10-12), so every value is trimmed before use.
+const clean = (env: BillingEnv): BillingEnv => ({ token: env.token?.trim(), productId: env.productId?.trim(), server: env.server, appUrl: env.appUrl?.trim() });
 const withParam = (url: string, param: string): string => `${url}${url.includes('?') ? '&' : '?'}${param}`;
 const validEmail = (value: unknown): value is string => typeof value === 'string' && value.length <= 254 && /^[^\s@,;<>()"']+@[^\s@,;<>()"']+\.[^\s@,;<>()"']+$/.test(value);
 // Only https addresses of polar.sh (checkout.polar.sh, sandbox.polar.sh, polar.sh) are handed to the page.
@@ -31,13 +34,38 @@ async function callPolar(env: BillingEnv, path: string, body: unknown, fetchFn: 
       headers: { Authorization: `Bearer ${env.token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    return { ok: response.ok, data: await response.json().catch(() => ({})) };
-  } catch {
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) console.error(`polar ${path} failed: ${response.status} ${describeError(data)}`); // never the request, never a header
+    return { ok: response.ok, data };
+  } catch (err) {
+    // The error text is left out on purpose (it can quote the header with the token); only its kind and the SHAPE of the token are logged.
+    console.error(`polar ${path} failed: network error (${(err as Error)?.name ?? 'unknown'}; token ${describeToken(env.token)})`);
     return { ok: false, data: {} };
   }
 }
 
-export async function createCheckout(admin: SupabaseClient, user: { id: string; email?: string | null }, plan: unknown, env: BillingEnv, nowMs = Date.now(), fetchFn: Fetch = fetch): Promise<Answer> {
+// A short, secret-free description of Polar's error answer (its validation messages name fields, never values we sent).
+function describeError(data: any): string {
+  const detail = data?.detail;
+  const text = Array.isArray(detail) ? detail.map((d: any) => `${Array.isArray(d?.loc) ? d.loc.join('.') : ''}: ${d?.msg ?? ''}`).join('; ') : typeof detail === 'string' ? detail : typeof data?.error === 'string' ? data.error : '';
+  return String(text).slice(0, 200);
+}
+
+// Length and character classes of a secret, never a character of it (to tell "pasted wrongly" from "Polar unreachable").
+function describeToken(value: string | undefined): string {
+  if (!value) return 'missing';
+  const odd = [...value].filter((c) => c.charCodeAt(0) < 33 || c.charCodeAt(0) > 126).length;
+  return `length ${value.length}, ${odd} unusual characters, starts like a Polar token: ${/^polar_oat_/.test(value)}`;
+}
+
+// Only the protocol and host of an address (never the path, which holds the checkout secret) for the log.
+function describeAddress(value: unknown): string {
+  if (typeof value !== 'string') return `no address (${typeof value})`;
+  try { const u = new URL(value); return `${u.protocol}//${u.hostname}`; } catch { return 'not an address'; }
+}
+
+export async function createCheckout(admin: SupabaseClient, user: { id: string; email?: string | null }, plan: unknown, rawEnv: BillingEnv, nowMs = Date.now(), fetchFn: Fetch = fetch): Promise<Answer> {
+  const env = clean(rawEnv);
   if (plan !== 'pro') return { status: 400, body: { error: 'unknown_plan' } }; // only plans we know; the member cannot pick a product or a price
   if (!configured(env)) return { status: 503, body: { error: 'not_configured' } };
   const { data: current, error } = await admin.from('subscriptions').select('status, current_period_end').eq('user_id', user.id).maybeSingle();
@@ -58,11 +86,13 @@ export async function createCheckout(admin: SupabaseClient, user: { id: string; 
     },
     fetchFn
   );
+  if (result.ok && !httpsUrl(result.data?.url)) console.error(`polar checkout answered without a usable address: ${describeAddress(result.data?.url)}`);
   if (!result.ok || !httpsUrl(result.data?.url)) return { status: 502, body: { error: 'checkout_failed' } };
   return { status: 200, body: { url: result.data.url } };
 }
 
-export async function createPortal(admin: SupabaseClient, user: { id: string }, env: BillingEnv, fetchFn: Fetch = fetch): Promise<Answer> {
+export async function createPortal(admin: SupabaseClient, user: { id: string }, rawEnv: BillingEnv, fetchFn: Fetch = fetch): Promise<Answer> {
+  const env = clean(rawEnv);
   if (!configured(env)) return { status: 503, body: { error: 'not_configured' } };
   const { data: row, error } = await admin.from('subscriptions').select('polar_customer_id, source').eq('user_id', user.id).maybeSingle();
   if (error) return { status: 500, body: { error: 'read_failed' } };

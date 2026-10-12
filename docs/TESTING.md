@@ -293,3 +293,15 @@ Method: read every changed file again line by line, ask "what happens in the rea
 | 16 | Test bugs found on the way: a fixture shared between two tests, a fake database that ordered nulls wrongly, a lost template literal and a stray control character from my own shell commands (all caught by tests or by a control-character scan of the repository) | none | fixed | scan is clean |
 
 Results after both passes: 232 unit tests pass; 11 more deliberate breakages (no duplicate shortcut, old subscription switches off the new one, no size limit, failed save recorded as done, past_due can buy twice, running scan not stopped, Free asked for calendar permission, digest order removed, all-day events saved for all days, overnight events dropped on the server and on the page) every one made tests fail; deployed gmail-sync v20, polar-webhook v2, polar-billing v2, gmail-connect v5; live probes: scheduled run 200 with the digests block, unsigned webhook 503 (no secret yet, so nothing is trusted), garbage tokens 401; the owner's connection stayed active, 70 summaries intact, billing still off, manual Pro grant in place.
+## First sandbox payment attempt (2026-10-12): what was found
+| Step | Result |
+|---|---|
+| Throw-away member on localhost, free plan | plan card shows "שדרג ל-Pro", scan locked (`billing_enforced=true` only during the test, set back to `false`) |
+| Press "upgrade" | first answer 502 `checkout_failed`; the function swallowed Polar's reason |
+| Fix 1 | logs now say why (Polar's error text or the SHAPE of the token, never a character of it); deployed as polar-billing v8 |
+| Cause found | the Supabase secret held pasted text that was not the token (the copy button of the embedded browser pane did not fill the clipboard; the paste held an older text). Visible in the log as `token length 323, 237 unusual characters, starts like a Polar token: false` |
+| Fix 2 | values are trimmed (a pasted newline/space makes `fetch` throw); 2 new tests; mutation check: removing the trim turns exactly those tests red (234 tests pass) |
+| After pasting the real token (selected by triple-click, copied with Ctrl+C) | checkout answered 200 with a `sandbox.polar.sh` address; the page opened Polar's checkout (Gmail Agent Pro, 19 ILS / month) |
+| Not done (deferred by the owner) | paying with the Polar test card, webhook delivery, Pro state, portal, cancellation |
+| Cleanup | `billing_enforced=false`, throw-away member deleted (1 user, 1 connection, 1 subscription = the owner's manual grant), no leftover trigger, dev server stopped |
+Lesson: with a secret stored in a dashboard, check its SHAPE from a log of the function, not by eye.
