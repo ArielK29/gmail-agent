@@ -1,7 +1,8 @@
-// The page calls this with the member's own session: action "checkout" (returns the Polar payment page address) or "portal"
-// (returns the customer-portal address where the member can see invoices, change the card or cancel).
+// The page calls this with the member's own session: action "checkout" (returns the Polar payment page address), "portal"
+// (returns the customer-portal address where the member can see invoices, change the card or cancel) or "info" (which Polar
+// environment this is and what Pro costs, read from Polar).
 import { createClient } from 'npm:@supabase/supabase-js@2';
-import { createCheckout, createPortal } from './billing.ts';
+import { createCheckout, createInfo, createPortal } from './billing.ts';
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -20,6 +21,6 @@ Deno.serve(async (req: Request) => {
   const body = await req.json().catch(() => ({}));
   const env = { token: Deno.env.get('POLAR_ACCESS_TOKEN'), productId: Deno.env.get('POLAR_PRODUCT_ID'), server: Deno.env.get('POLAR_SERVER'), appUrl: Deno.env.get('APP_URL') };
   const user = { id: data.user.id, email: data.user.email };
-  const answer = body?.action === 'portal' ? await createPortal(admin, user, env) : body?.action === 'checkout' ? await createCheckout(admin, user, body.plan, env) : { status: 400, body: { error: 'unknown_action' } };
+  const answer = body?.action === 'portal' ? await createPortal(admin, user, env) : body?.action === 'checkout' ? await createCheckout(admin, user, body.plan, env) : body?.action === 'info' ? await createInfo(env) : { status: 400, body: { error: 'unknown_action' } };
   return reply(answer.status, answer.body);
 });

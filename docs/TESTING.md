@@ -305,3 +305,17 @@ Results after both passes: 232 unit tests pass; 11 more deliberate breakages (no
 | Not done (deferred by the owner) | paying with the Polar test card, webhook delivery, Pro state, portal, cancellation |
 | Cleanup | `billing_enforced=false`, throw-away member deleted (1 user, 1 connection, 1 subscription = the owner's manual grant), no leftover trigger, dev server stopped |
 Lesson: with a secret stored in a dashboard, check its SHAPE from a log of the function, not by eye.
+## Payment hardening, issue #24 (2026-10-12): tests first, then code
+Order followed (test-driven): 1) 16 new tests written first and seen FAILING for the right reason (feature missing); 2) minimal code until green; 3) 12 deliberate breakages, each caught; 4) migration rehearsed inside a rolled-back transaction together with the permission test; 5) deploy; 6) live check; 7) cleanup.
+| What | Result |
+|---|---|
+| Webhook: only OUR product counts (`other_product` / `no_product` ignored; 503 when `POLAR_PRODUCT_ID` is not configured; exact match) | tests + live: unsigned and forged messages answer 403 (so the product id is configured) |
+| Webhook outcome log: one row per finished message (outcome, reason, member id, status, period end), never the payload, e-mail, name or secret | tests (whitelist of columns, forbidden strings, printed output) |
+| Polar environment tag on every subscription row (`polar_server`); a row of the other environment never grants Pro, never blocks a purchase, and is replaced by the real message even when it looks newer; manual grants count everywhere; only the exact word `production` means production | tests in webhook, billing and access (4 copies of entitlement.ts identical, 2 copies of access.ts identical) |
+| `polar-billing` action `info`: environment + price read from Polar (GET, trimmed token, 5 minute cache, failures never cached, hostile answers give no price, answer never contains token/product id) | 5 tests; LIVE: answered `sandbox`, 19.00 ILS per month |
+| Page: price line and the "test payment" note follow the SERVER; when the server cannot tell, nothing is guessed and a Free member cannot start a payment | 3 tests + browser: card showed "מנוי Pro: 19 ₪ לחודש" and the note; with a forced failure the upgrade button and note were hidden and the message "פרטי התשלום לא זמינים כרגע" appeared; recovered on the next load; no horizontal scroll |
+| Migration 019 (+ 7 permission checks, 28 lines all good/expected), advisors | only the known items (server-only tables INFO, `pg_net`, leaked-password protection) |
+| Mutation checks | 12 of 12 caught (no product allowlist, stale row kept, tag not written, payload in the log, liveRow lenient x2, lenient word production, access ignores environment, checkout ignores environment, no price cache, any amount accepted, page claims unknown facts) |
+| Whole suite | 251 pass, 0 fail |
+| Cleanup | `billing_enforced=false`, throw-away member deleted (1 user, 1 connection, 1 subscription = the owner's manual grant), dev server stopped |
+Deployed: polar-webhook v7, polar-billing v11, migration 019, page (logic.js?v=20261013c). **NOT yet deployed (no behaviour change while `POLAR_SERVER=sandbox`; deploy before production):** gmail-sync and gmail-connect (new `access.ts` and `entitlement.ts`). Not verified: Polar's real subscription payload (product id field names) - checked in the sandbox payment window (#25); if the allowlist ignores a real payment the outcome log shows `no_product` or `other_product`.

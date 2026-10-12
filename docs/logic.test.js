@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, agendaBriefing, deadlineLabel, greeting, localDay, planView, isProRow, billingErrorMessage, isPayUrl } = require('./logic.js');
+const { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, agendaBriefing, deadlineLabel, greeting, localDay, planView, isProRow, billingErrorMessage, isPayUrl, priceText } = require('./logic.js');
 
 test('authMessage maps the Supabase errors seen in the browser run', () => {
   assert.equal(authMessage({ message: 'Invalid login credentials' }), 'האימייל או הסיסמה שגויים.');
@@ -469,7 +469,7 @@ test('planView: while billing is not enforced everybody sees "beta" and no payme
 });
 
 test('planView: enforced - Free sees the upgrade button and locked features; Pro sees the manage button and the renewal date; cancelled shows the end date', () => {
-  const free = planView(true, null, PNOW);
+  const free = planView(true, null, PNOW, BILL);
   assert.deepEqual([free.mode, free.canUpgrade, free.canManage, free.locked], ['free', true, false, true]);
   assert.ok(free.text.includes('סיכום יומי'));
   const pro = planView(true, proSub(), PNOW);
@@ -517,4 +517,36 @@ test('agendaBriefing: an event that started yesterday evening and is still runni
   const b = agendaBriefing([ev('night', L(12, 22), L(13, 2)), ev('over', L(12, 21), L(13, 0, 10)), ev('days', L(11, 9), L(14, 18))], now, '2026-10-13');
   assert.deepEqual(b.events.map((e) => e.row.external_id).sort(), ['days', 'night']);
   assert.ok(b.events.every((e) => e.label.startsWith('עכשיו')));
+});
+
+// ---- issue #24: the plan card shows the real price and follows the environment the SERVER reports ----
+const BILL = { environment: 'sandbox', price: { amount: 1900, currency: 'ILS', interval: 'month' } };
+test('priceText: a short Hebrew price line from the facts Polar gave, empty for anything odd', () => {
+  assert.equal(priceText({ amount: 1900, currency: 'ILS', interval: 'month' }), '19 ₪ לחודש');
+  assert.equal(priceText({ amount: 1950, currency: 'ILS', interval: 'month' }), '19.50 ₪ לחודש');
+  assert.equal(priceText({ amount: 500, currency: 'USD', interval: 'month' }), '5 $ לחודש');
+  assert.equal(priceText({ amount: 19000, currency: 'ILS', interval: 'year' }), '190 ₪ לשנה');
+  assert.equal(priceText({ amount: 900, currency: 'CHF', interval: 'week' }), '9 CHF לשבוע');
+  for (const odd of [null, undefined, 5, 'x', [], {}, { amount: 0, currency: 'ILS', interval: 'month' }, { amount: -1, currency: 'ILS', interval: 'month' }, { amount: 1.5, currency: 'ILS', interval: 'month' }, { amount: '1900', currency: 'ILS', interval: 'month' }, { amount: 1900, currency: 'shekel', interval: 'month' }, { amount: 1900, currency: 'ILS', interval: 'decade' }, { amount: 1e12, currency: 'ILS', interval: 'month' }]) assert.equal(priceText(odd), '', JSON.stringify(odd));
+});
+
+test('planView: Free sees the real price line; the "test payment" note follows the environment the server reports, never a guess', () => {
+  const sandbox = planView(true, null, PNOW, BILL);
+  assert.deepEqual([sandbox.mode, sandbox.canUpgrade, sandbox.sandbox, sandbox.unavailable], ['free', true, true, false]);
+  assert.ok(sandbox.priceLine.includes('19 ₪ לחודש'), sandbox.priceLine);
+  const production = planView(true, null, PNOW, { ...BILL, environment: 'production' });
+  assert.deepEqual([production.canUpgrade, production.sandbox], [true, false], 'no "no real charge" claim in production');
+  assert.ok(production.priceLine.includes('19 ₪ לחודש'));
+});
+
+test('planView: when the server could not tell the environment or the price, Free cannot start a payment and is told so; Pro can still manage; beta says nothing', () => {
+  for (const unknown of [null, undefined, { environment: 'sandbox', price: null }, { environment: 'live', price: BILL.price }, { price: BILL.price }, 'x', 5]) {
+    const v = planView(true, null, PNOW, unknown);
+    assert.deepEqual([v.mode, v.canUpgrade, v.unavailable, v.locked, v.sandbox], ['free', false, true, true, false], JSON.stringify(unknown));
+    assert.equal(v.priceLine, '');
+  }
+  const pro = planView(true, proSub(), PNOW, null);
+  assert.deepEqual([pro.mode, pro.canManage, pro.sandbox, pro.unavailable], ['pro', true, false, false], 'a paying member can always reach the portal, and nothing false is claimed about the environment');
+  const beta = planView(false, null, PNOW, null);
+  assert.deepEqual([beta.mode, beta.canUpgrade, beta.unavailable, beta.priceLine], ['beta', false, false, '']);
 });

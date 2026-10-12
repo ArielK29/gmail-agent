@@ -2,7 +2,7 @@
 // token stays on the server. The id we give Polar as `external_customer_id` is the member's own id, so the webhook can find the
 // member again. Card details never reach us: the member pays on Polar's page.
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
-import { isPro } from './entitlement.ts';
+import { isPro, liveRow, serverKind } from './entitlement.ts';
 
 export interface BillingEnv { token?: string; productId?: string; server?: string; appUrl?: string }
 export interface Answer { status: number; body: Record<string, unknown> }
@@ -68,11 +68,11 @@ export async function createCheckout(admin: SupabaseClient, user: { id: string; 
   const env = clean(rawEnv);
   if (plan !== 'pro') return { status: 400, body: { error: 'unknown_plan' } }; // only plans we know; the member cannot pick a product or a price
   if (!configured(env)) return { status: 503, body: { error: 'not_configured' } };
-  const { data: current, error } = await admin.from('subscriptions').select('status, current_period_end').eq('user_id', user.id).maybeSingle();
+  const { data: current, error } = await admin.from('subscriptions').select('status, current_period_end, source, polar_server').eq('user_id', user.id).maybeSingle();
   if (error) return { status: 500, body: { error: 'read_failed' } };
   // Anyone who still has a live subscription (also trialing, or past_due while the card is being retried) must not buy a second one;
   // they manage the existing one in the portal.
-  if (isPro(current, nowMs)) return { status: 409, body: { error: 'already_subscribed' } };
+  if (isPro(liveRow(current, env.server), nowMs)) return { status: 409, body: { error: 'already_subscribed' } }; // a row of the other Polar environment does not count
   const result = await callPolar(
     env,
     '/checkouts/',
@@ -100,4 +100,48 @@ export async function createPortal(admin: SupabaseClient, user: { id: string }, 
   const result = await callPolar(env, '/customer-sessions/', { customer_id: row.polar_customer_id, return_url: env.appUrl }, fetchFn);
   if (!result.ok || !httpsUrl(result.data?.customer_portal_url)) return { status: 502, body: { error: 'portal_failed' } };
   return { status: 200, body: { url: result.data.customer_portal_url } };
+}
+
+// ---- The facts the page needs before it offers a payment: which Polar world this is, and what Pro costs (issue #24). ----
+// Read from Polar itself (never typed in the page), remembered for five minutes per product and environment; a failure is never remembered.
+export interface PriceFacts { amount: number; currency: string; interval: 'day' | 'week' | 'month' | 'year' }
+const INFO_KEEP_MS = 5 * 60 * 1000;
+const INTERVALS = ['day', 'week', 'month', 'year'];
+const INFO_CACHE = new Map<string, { at: number; price: PriceFacts | null }>();
+
+// The first price that is not archived and has a fixed amount; anything odd gives null (never a made-up price).
+function readPrice(product: any): PriceFacts | null {
+  const prices = Array.isArray(product?.prices) ? product.prices : [];
+  for (const price of prices) {
+    if (!price || typeof price !== 'object' || price.is_archived === true || price.amount_type !== 'fixed') continue;
+    const amount = price.price_amount;
+    const currency = price.price_currency;
+    const interval = price.recurring_interval ?? product?.recurring_interval;
+    if (!Number.isInteger(amount) || amount <= 0 || amount > 100_000_000) continue;
+    if (typeof currency !== 'string' || !/^[A-Za-z]{3}$/.test(currency)) continue;
+    if (!INTERVALS.includes(interval)) continue;
+    return { amount, currency: currency.toUpperCase(), interval };
+  }
+  return null;
+}
+
+export async function createInfo(rawEnv: BillingEnv, fetchFn: Fetch = fetch, nowMs = Date.now(), cache: Map<string, { at: number; price: PriceFacts | null }> = INFO_CACHE): Promise<Answer> {
+  const env = clean(rawEnv);
+  if (!env.token || !env.productId) return { status: 503, body: { error: 'not_configured' } };
+  const environment = serverKind(env.server);
+  const key = `${environment}:${env.productId}`;
+  const known = cache.get(key);
+  if (known && nowMs - known.at <= INFO_KEEP_MS) return { status: 200, body: { environment, price: known.price } };
+  let product: unknown;
+  try {
+    const response = await fetchFn(`${polarBase(env.server)}/products/${encodeURIComponent(env.productId)}`, { method: 'GET', headers: { Authorization: `Bearer ${env.token}` } });
+    if (!response.ok) { console.error(`polar product lookup failed: ${response.status}`); return { status: 502, body: { error: 'info_failed' } }; }
+    product = await response.json().catch(() => null);
+  } catch {
+    console.error('polar product lookup failed: network error'); // the error text can quote the header with the token, so it is left out
+    return { status: 502, body: { error: 'info_failed' } };
+  }
+  const price = readPrice(product);
+  cache.set(key, { at: nowMs, price });
+  return { status: 200, body: { environment, price } };
 }

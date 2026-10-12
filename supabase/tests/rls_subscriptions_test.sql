@@ -35,6 +35,12 @@ begin
   exception when others then res := res || '9 a reads webhook ids: denied (good)' || E'\n'; end;
   begin insert into public.polar_events (webhook_id, type) values ('forged', 'x'); res := res || '10 a writes a webhook id: ALLOWED (BAD)' || E'\n';
   exception when others then res := res || '10 a writes a webhook id: denied (good)' || E'\n'; end;
+  begin perform polar_server from public.subscriptions; res := res || '22 a reads which Polar environment the row is from: ALLOWED (BAD)' || E'\n';
+  exception when others then res := res || '22 a reads which Polar environment the row is from: denied (good)' || E'\n'; end;
+  begin perform outcome from public.polar_events; res := res || '23 a reads the webhook outcome log: ALLOWED (BAD)' || E'\n';
+  exception when others then res := res || '23 a reads the webhook outcome log: denied (good)' || E'\n'; end;
+  begin update public.polar_events set outcome = 'applied'; res := res || '24 a rewrites the webhook outcome log: ALLOWED (BAD)' || E'\n';
+  exception when others then res := res || '24 a rewrites the webhook outcome log: denied (good)' || E'\n'; end;
   select value::text into v from public.app_settings where key = 'billing_enforced';
   res := res || '11 a reads the billing switch (expect false): ' || v || E'\n';
   begin update public.app_settings set value = 'true'::jsonb; res := res || '12 a flips the billing switch: ALLOWED (BAD)' || E'\n';
@@ -56,6 +62,8 @@ begin
   exception when others then res := res || '16 anon reads subscriptions: denied (good)' || E'\n'; end;
   begin perform 1 from public.app_settings; res := res || '17 anon reads settings: ALLOWED (BAD)' || E'\n';
   exception when others then res := res || '17 anon reads settings: denied (good)' || E'\n'; end;
+  begin perform 1 from public.polar_events; res := res || '25 anon reads the webhook outcome log: ALLOWED (BAD)' || E'\n';
+  exception when others then res := res || '25 anon reads the webhook outcome log: denied (good)' || E'\n'; end;
   reset role;
   begin insert into public.subscriptions (user_id, status) values (gen_random_uuid(), 'active'); res := res || '18 a subscription for a member that does not exist: ALLOWED (BAD)' || E'\n';
   exception when foreign_key_violation then res := res || '18 a subscription for a member that does not exist: refused (good)' || E'\n'; end;
@@ -63,8 +71,15 @@ begin
   exception when others then res := res || '19 an unknown status: refused (good)' || E'\n'; end;
   begin insert into public.subscriptions (user_id, status, polar_subscription_id) values (b, 'active', 'sub-a'); res := res || '20 the same Polar subscription for two members: ALLOWED (BAD)' || E'\n';
   exception when others then res := res || '20 the same Polar subscription for two members: refused (good)' || E'\n'; end;
+  begin update public.subscriptions set polar_server = 'staging' where user_id = a; res := res || '26 an unknown Polar environment: ALLOWED (BAD)' || E'\n';
+  exception when others then res := res || '26 an unknown Polar environment: refused (good)' || E'\n'; end;
+  begin insert into public.polar_events (webhook_id, type, outcome) values ('evt-bad', 'x', 'maybe'); res := res || '27 an unknown webhook outcome: ALLOWED (BAD)' || E'\n';
+  exception when others then res := res || '27 an unknown webhook outcome: refused (good)' || E'\n'; end;
+  insert into public.polar_events (webhook_id, type, outcome, user_id, subscription_status) values ('evt-b', 'subscription.active', 'applied', b, 'active');
   delete from auth.users where id = b;
   select count(*) into n from public.subscriptions where user_id = b;
   res := res || '21 deleting member b removes the subscription (expect 0): ' || n || E'\n';
+  select count(*) into n from public.polar_events where webhook_id = 'evt-b' and user_id is null;
+  res := res || '28 deleting member b keeps the log line but forgets who (expect 1): ' || n || E'\n';
   raise exception E'RESULT\n%', res;
 end $$;

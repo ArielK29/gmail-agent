@@ -166,3 +166,22 @@ test('e-mail briefing: when more members are opted in than one run handles, whoe
   await sendDigests(db as any, NOW, s.send as any, 2); // a run that can only handle two members
   assert.deepEqual(s.sent.sort(), ['b@example.com', 'c@example.com'], 'never mailed first, then the oldest');
 });
+test('access: a subscription of the OTHER Polar environment never gives Pro (sandbox test data in production, and the reverse); manual grants always do', async () => {
+  const live = { user_id: U, status: 'active', current_period_end: day(10) };
+  const check = async (server: string | undefined, row: Row) => { if (server === undefined) delete env.POLAR_SERVER; else env.POLAR_SERVER = server; try { return await memberHasPro(world({ enforced: true, subs: [row] }) as any, U, NOW); } finally { delete env.POLAR_SERVER; } };
+  assert.equal(await check('production', { ...live, source: 'polar', polar_server: 'sandbox' }), false, 'sandbox row in production');
+  assert.equal(await check('production', { ...live, source: 'polar' }), false, 'an untagged row is sandbox data');
+  assert.equal(await check('production', { ...live, source: 'polar', polar_server: 'production' }), true);
+  assert.equal(await check('sandbox', { ...live, source: 'polar', polar_server: 'sandbox' }), true);
+  assert.equal(await check(undefined, { ...live, source: 'polar', polar_server: 'sandbox' }), true, 'unset = sandbox');
+  assert.equal(await check(undefined, { ...live, source: 'polar' }), true);
+  assert.equal(await check('sandbox', { ...live, source: 'polar', polar_server: 'production' }), false);
+  assert.equal(await check('production\n', { ...live, source: 'polar', polar_server: 'production' }), false, 'a typo means sandbox: the safe side');
+  for (const server of ['production', 'sandbox', undefined]) assert.equal(await check(server, { ...live, source: 'manual', current_period_end: null }), true, 'manual in ' + server);
+  // the same rule for many members at once (the e-mail briefing run)
+  env.POLAR_SERVER = 'production';
+  try {
+    const several = world({ enforced: true, subs: [{ ...live, source: 'polar', polar_server: 'production' }, { user_id: 'other', status: 'active', current_period_end: day(10), source: 'polar', polar_server: 'sandbox' }, { user_id: 'third', status: 'active', source: 'manual', current_period_end: null }] });
+    assert.deepEqual([...(await membersWithPro(several as any, [U, 'other', 'third'], NOW))!].sort(), ['third', U].sort());
+  } finally { delete env.POLAR_SERVER; }
+});

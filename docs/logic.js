@@ -291,11 +291,26 @@
   }
   const dateText = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`; };
 
-  // What the plan card shows. `enforced` is the server switch (false = the testers phase, everything free); `sub` is the member's row.
-  function planView(enforced, sub, now, environment) {
+  // The price line from the facts Polar gave (amount in the smallest unit): '19 ₪ לחודש'. Anything odd gives '' (never a made-up price).
+  function priceText(price) {
+    if (!price || typeof price !== 'object') return '';
+    const { amount, currency, interval } = price;
+    const per = { day: 'ליום', week: 'לשבוע', month: 'לחודש', year: 'לשנה' }[interval];
+    if (!Number.isInteger(amount) || amount <= 0 || amount > 100000000 || typeof currency !== 'string' || !/^[A-Za-z]{3}$/.test(currency) || !per) return '';
+    const whole = amount % 100 === 0 ? String(amount / 100) : (amount / 100).toFixed(2);
+    const symbol = { ILS: '₪', USD: '$', EUR: '€', GBP: '£' }[currency.toUpperCase()] || currency.toUpperCase();
+    return `${whole} ${symbol} ${per}`;
+  }
+
+  // What the plan card shows. `enforced` is the server switch (false = the testers phase, everything free); `sub` is the member's row;
+  // `billing` is what the SERVER reported ({ environment: 'sandbox' | 'production', price }), or null when it could not: then nothing
+  // is guessed (no "test payment" claim, no price) and a Free member cannot start a payment.
+  function planView(enforced, sub, now, billing) {
     const nowMs = now instanceof Date ? now.getTime() : Date.now();
-    const sandbox = environment !== 'production'; // anything but a real production setting is a test payment
-    if (enforced !== true) return { mode: 'beta', sandbox, title: 'גרסת ניסוי', text: 'בשלב הטסטרים כל התכונות פתוחות וחינמיות.', canUpgrade: false, canManage: false, locked: false };
+    const known = Boolean(billing && typeof billing === 'object' && (billing.environment === 'sandbox' || billing.environment === 'production') && priceText(billing.price));
+    const sandbox = known && billing.environment === 'sandbox';
+    const priceLine = known ? `מנוי Pro: ${priceText(billing.price)}` : '';
+    if (enforced !== true) return { mode: 'beta', sandbox: false, title: 'גרסת ניסוי', text: 'בשלב הטסטרים כל התכונות פתוחות וחינמיות.', priceLine: '', canUpgrade: false, canManage: false, locked: false, unavailable: false };
     if (isProRow(sub, nowMs)) {
       const end = sub && sub.current_period_end ? dateText(sub.current_period_end) : '';
       const manual = Boolean(sub && sub.source === 'manual');
@@ -303,11 +318,10 @@
         : sub.cancel_at_period_end ? `המנוי בוטל וימשיך לעבוד עד ${end || 'סוף התקופה'}.`
         : sub.status === 'past_due' ? 'התשלום האחרון נכשל. עדכן את אמצעי התשלום בניהול המנוי.'
         : end ? `המנוי מתחדש ב-${end}.` : 'המנוי פעיל.';
-      return { mode: 'pro', sandbox, title: manual ? 'Pro (הענקה ידנית)' : 'מנוי Pro פעיל', text, canUpgrade: false, canManage: !manual, locked: false };
+      return { mode: 'pro', sandbox, title: manual ? 'Pro (הענקה ידנית)' : 'מנוי Pro פעיל', text, priceLine: '', canUpgrade: false, canManage: !manual, locked: false, unavailable: false };
     }
-    return { mode: 'free', sandbox, title: 'המסלול החינמי', text: 'חינם: סיכום יומי ובריפינג. סריקה והצלבה, יומן ומשימות ומייל בוקר זמינים במנוי Pro.', canUpgrade: true, canManage: false, locked: true };
+    return { mode: 'free', sandbox, title: 'המסלול החינמי', text: 'חינם: סיכום יומי ובריפינג. סריקה והצלבה, יומן ומשימות ומייל בוקר זמינים במנוי Pro.', priceLine, canUpgrade: known, canManage: false, locked: true, unavailable: !known };
   }
-
   // The server's reason for a refused payment request, in Hebrew.
   function billingErrorMessage(code) {
     const texts = {
@@ -323,6 +337,6 @@
   const isPayUrl = (value) => {
     if (typeof value !== 'string' || value.length > 2083 || !/^https:\/\/[^\s]+$/.test(value)) return false;
     try { const host = new URL(value).hostname.toLowerCase(); return host === 'polar.sh' || host.endsWith('.polar.sh'); } catch { return false; }
-  };  return { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, agendaBriefing, deadlineLabel, greeting, localDay, planView, isProRow, billingErrorMessage, isPayUrl };
+  };  return { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, agendaBriefing, deadlineLabel, greeting, localDay, planView, isProRow, billingErrorMessage, isPayUrl, priceText };
 });
 

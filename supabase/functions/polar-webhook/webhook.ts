@@ -70,7 +70,7 @@ export interface StoredSubscription {
   polar_subscription_id: string;
   polar_modified_at: string | null;
 }
-export type Parsed = { kind: 'ignore'; reason: string } | { kind: 'subscription'; userId: string; row: StoredSubscription };
+export type Parsed = { kind: 'ignore'; reason: string } | { kind: 'subscription'; userId: string; productId: string | null; row: StoredSubscription };
 
 const iso = (value: unknown): string | null => {
   if (typeof value !== 'string') return null;
@@ -96,6 +96,7 @@ export function parseSubscriptionEvent(payload: unknown): Parsed {
   return {
     kind: 'subscription',
     userId: userId.toLowerCase(),
+    productId: shortText(data.product_id) ?? shortText(data.product?.id),
     row: {
       status: data.status,
       current_period_end: iso(data.current_period_end),

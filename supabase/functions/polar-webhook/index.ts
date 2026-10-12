@@ -10,7 +10,9 @@ Deno.serve(async (req: Request) => {
   const answer = await handleWebhook(
     admin,
     { headers: { id: req.headers.get('webhook-id'), timestamp: req.headers.get('webhook-timestamp'), signature: req.headers.get('webhook-signature') }, rawBody },
-    Deno.env.get('POLAR_WEBHOOK_SECRET')
+    Deno.env.get('POLAR_WEBHOOK_SECRET'),
+    Date.now(),
+    { productId: Deno.env.get('POLAR_PRODUCT_ID'), server: Deno.env.get('POLAR_SERVER') }
   );
   return new Response(JSON.stringify(answer.body), { status: answer.status, headers: { 'Content-Type': 'application/json' } });
 });

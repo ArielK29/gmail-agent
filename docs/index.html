@@ -100,6 +100,7 @@
   <section id="planCard" class="card hidden" aria-labelledby="planTitle">
     <strong id="planTitle"></strong>
     <div id="planText" class="status"></div>
+    <div id="planPrice" class="status hidden"></div>
     <div id="planSandbox" class="warn hidden" role="note">תשלום ניסיוני: זו סביבת בדיקה ואין חיוב אמיתי. אפשר להשתמש בכרטיס הבדיקה של Polar.</div>
     <button id="planUpgrade" type="button" class="hidden">שדרג ל-Pro</button>
     <button id="planManage" type="button" class="secondary hidden">ניהול המנוי</button>
@@ -174,7 +175,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js"></script>
-<script src="logic.js?v=20261013b"></script>
+<script src="logic.js?v=20261013c"></script>
 <script>
   // config.js defines window.APP_CONFIG = { supabaseUrl, supabaseKey } (the publishable key; never a secret key).
   const { supabaseUrl, supabaseKey } = window.APP_CONFIG;
@@ -268,13 +269,17 @@
   }
 
   // The plan card. enforced false = the testers phase: everything is free and no payment buttons are shown.
-  function renderPlan(settings, sub) {
+  function renderPlan(settings, sub, billing) {
     if (settings === null) { planLocked = false; show($('planCard'), false); return; } // the switch could not be read: say nothing, lock nothing (the server decides)
     const value = (key) => { const found = (Array.isArray(settings) ? settings : []).find((row) => row && row.key === key); return found ? found.value : undefined; };
-    const view = logic.planView(value('billing_enforced') === true, sub, new Date(), value('polar_environment'));
+    const view = logic.planView(value('billing_enforced') === true, sub, new Date(), billing);
     planLocked = view.locked; planChecked = true;
     show($('planCard'), true);
     $('planTitle').textContent = view.title; $('planText').textContent = view.text;
+    $('planPrice').textContent = view.priceLine; show($('planPrice'), view.priceLine !== '');
+    const UNAVAILABLE = 'פרטי התשלום לא זמינים כרגע. נסה שוב בעוד רגע.';
+    if (view.unavailable) $('planStatus').textContent = UNAVAILABLE; // the server could not tell the price or the environment: nothing is guessed
+    else if ($('planStatus').textContent === UNAVAILABLE) $('planStatus').textContent = '';
     show($('planUpgrade'), view.canUpgrade); show($('planManage'), view.canManage);
     show($('planSandbox'), view.mode !== 'beta' && view.sandbox && (view.canUpgrade || view.canManage));
   }
@@ -286,6 +291,10 @@
       throw new Error(code || 'unknown');
     }
     return data;
+  }
+  // The environment and the price, as the server reads them from Polar. Any failure gives null: the page then claims nothing.
+  async function loadBillingInfo() {
+    try { return await callBilling('info'); } catch { return null; }
   }
   async function goToPolar(action, button) {
     button.disabled = true; $('planStatus').textContent = 'פותח...';
@@ -599,7 +608,7 @@
       if (!signedIn) { clearMemberData(); return; }
 
       const connectionResult = await db.from('gmail_connections').select('user_id, google_email, last_checked_at, status, has_calendar, has_tasks, digest_email, digest_last_sent_on, digest_failures').maybeSingle();
-      const settingsResult = await db.from('app_settings').select('key, value').in('key', ['billing_enforced', 'polar_environment']);
+      const settingsResult = await db.from('app_settings').select('key, value').in('key', ['billing_enforced']);
       const subResult = await db.from('subscriptions').select('status, current_period_end, cancel_at_period_end, source').maybeSingle();
       const agendaResult = await db.from('gmail_agenda').select('kind, external_id, title, starts_at, ends_at, all_day, day').limit(200);
       const digestResult = await db.from('gmail_digest').select('id, from_name, subject, category, summary, urgency, suggested_action, received_at, due_date, needs_reply, handled_at')
@@ -619,7 +628,10 @@
           ? `מחובר: ${connection.google_email || 'Gmail'}${connection.last_checked_at ? ' · נבדק לאחרונה ' + new Date(connection.last_checked_at).toLocaleString('he-IL') : ''}`
           : 'Gmail עדיין לא מחובר.';
       show($('connect'), !connected || expired); show($('check'), connected && !expired); show($('disconnect'), connected);
-      renderPlan(settingsResult.error ? null : settingsResult.data || [], subResult.error ? null : subResult.data); // a failed read never locks anything: the server decides
+      const enforcedNow = !settingsResult.error && (settingsResult.data || []).some((row) => row && row.key === 'billing_enforced' && row.value === true);
+      const billing = enforcedNow ? await loadBillingInfo() : null; // which Polar environment this is and what Pro costs, from the server (only needed once billing is on)
+      if (mine !== refreshSeq) return;
+      renderPlan(settingsResult.error ? null : settingsResult.data || [], subResult.error ? null : subResult.data, billing); // a failed read never locks anything: the server decides
       renderDigestEmail(connected && !expired && !planLocked ? connection : null);
 
       allRows = digestResult.data || [];

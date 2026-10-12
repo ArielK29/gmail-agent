@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { makeDb, rng, type Row } from '../gmail-sync/testkit.ts';
 import { verifySignature, parseSubscriptionEvent, TOLERANCE_SECONDS } from './webhook.ts';
 import { handleWebhook } from './handler.ts';
-import { isPro, hasProAccess, GRACE_MS } from './entitlement.ts';
+import { isPro, hasProAccess, GRACE_MS, liveRow, serverKind } from './entitlement.ts';
 
 const NOW = Date.parse('2026-10-13T08:00:00Z');
 const U1 = '11111111-1111-4111-8111-111111111111';
@@ -94,13 +94,15 @@ test('signature: several signatures in one header (key rotation): any matching o
 });
 
 // ---------------------------------------------------------------- translation
+const PRODUCT = 'c0a5bcf3-700a-4076-9eed-9b3d542be0fb'; // a made-up product id for the tests
+const CFG = { productId: PRODUCT, server: 'sandbox' };
 const subscriptionEvent = (over: any = {}, type = 'subscription.active') => ({
   type,
-  data: { id: 'sub_1', status: 'active', current_period_end: '2026-11-13T08:00:00Z', cancel_at_period_end: false, modified_at: '2026-10-13T08:00:00Z', customer: { id: 'cus_1', external_id: U1 }, ...over },
+  data: { id: 'sub_1', product_id: PRODUCT, status: 'active', current_period_end: '2026-11-13T08:00:00Z', cancel_at_period_end: false, modified_at: '2026-10-13T08:00:00Z', customer: { id: 'cus_1', external_id: U1 }, ...over },
 });
 test('events: a subscription event becomes our row for the member whose id we gave Polar', () => {
   const parsed = parseSubscriptionEvent(subscriptionEvent());
-  assert.deepEqual(parsed, { kind: 'subscription', userId: U1, row: { status: 'active', current_period_end: '2026-11-13T08:00:00.000Z', cancel_at_period_end: false, polar_customer_id: 'cus_1', polar_subscription_id: 'sub_1', polar_modified_at: '2026-10-13T08:00:00.000Z' } });
+  assert.deepEqual(parsed, { kind: 'subscription', userId: U1, productId: PRODUCT, row: { status: 'active', current_period_end: '2026-11-13T08:00:00.000Z', cancel_at_period_end: false, polar_customer_id: 'cus_1', polar_subscription_id: 'sub_1', polar_modified_at: '2026-10-13T08:00:00.000Z' } });
   assert.equal((parseSubscriptionEvent(subscriptionEvent({ customer: { id: 'cus_1' }, metadata: { user_id: U2 } })) as any).userId, U2, 'the metadata is the fallback');
   assert.equal((parseSubscriptionEvent(subscriptionEvent({ cancel_at_period_end: true, status: 'active' })) as any).row.cancel_at_period_end, true);
   assert.equal((parseSubscriptionEvent(subscriptionEvent({ modified_at: null, created_at: '2026-10-01T00:00:00Z' })) as any).row.polar_modified_at, '2026-10-01T00:00:00.000Z');
@@ -137,8 +139,8 @@ test('fuzz: 3000 random payloads never throw, and a result always carries a real
 
 // ---------------------------------------------------------------- the handler
 const makeWorld = (subs: Row[] = [], failing: Record<string, any> = {}) => makeDb({ subscriptions: subs, polar_events: [] }, failing);
-const send = (db: any, event: any, opts: { id?: string; ts?: number; secret?: string; signWith?: string } = {}, now = NOW) =>
-  handleWebhook(db, signed(opts.signWith ?? opts.secret ?? SECRET, JSON.stringify(event), { id: opts.id ?? 'evt_1', ts: Math.floor(now / 1000) }), opts.secret ?? SECRET, now);
+const send = (db: any, event: any, opts: { id?: string; ts?: number; secret?: string; signWith?: string; config?: any } = {}, now = NOW) =>
+  handleWebhook(db, signed(opts.signWith ?? opts.secret ?? SECRET, JSON.stringify(event), { id: opts.id ?? 'evt_1', ts: Math.floor(now / 1000) }), opts.secret ?? SECRET, now, opts.config ?? CFG);
 const subOf = (db: any, user = U1) => db.tables.subscriptions.find((s: Row) => s.user_id === user);
 
 test('handler: a valid message saves the subscription; the member becomes Pro', async () => {
@@ -152,12 +154,12 @@ test('handler: a valid message saves the subscription; the member becomes Pro', 
 test('handler: forged, unsigned, expired and unconfigured messages change nothing', async () => {
   const db = makeWorld();
   assert.equal((await send(db, subscriptionEvent(), { signWith: 'whsec_' + Buffer.from('attacker-secret-xxxxxxxxxxxxxxxxxxxx').toString('base64') })).status, 403);
-  assert.equal((await handleWebhook(db as any, { headers: { id: 'evt_9', timestamp: null, signature: null }, rawBody: JSON.stringify(subscriptionEvent()) }, SECRET, NOW)).status, 403);
+  assert.equal((await handleWebhook(db as any, { headers: { id: 'evt_9', timestamp: null, signature: null }, rawBody: JSON.stringify(subscriptionEvent()) }, SECRET, NOW, CFG)).status, 403);
   assert.equal((await send(db, subscriptionEvent(), {}, NOW)).status, 200);
   const old = signed(SECRET, JSON.stringify(subscriptionEvent({ status: 'canceled' })), { id: 'evt_old', ts: Math.floor(NOW / 1000) - 3600 });
-  assert.equal((await handleWebhook(makeWorld() as any, old, SECRET, NOW)).status, 403, 'a replayed old message');
-  assert.equal((await handleWebhook(makeWorld() as any, signed(SECRET, '{}'), undefined, NOW)).status, 503);
-  assert.equal((await handleWebhook(makeWorld() as any, signed(SECRET, '{}'), '  ', NOW)).status, 503);
+  assert.equal((await handleWebhook(makeWorld() as any, old, SECRET, NOW, CFG)).status, 403, 'a replayed old message');
+  assert.equal((await handleWebhook(makeWorld() as any, signed(SECRET, '{}'), undefined, NOW, CFG)).status, 503);
+  assert.equal((await handleWebhook(makeWorld() as any, signed(SECRET, '{}'), '  ', NOW, CFG)).status, 503);
   const empty = makeWorld();
   await send(empty, subscriptionEvent(), { signWith: 'whsec_' + Buffer.from('attacker-secret-xxxxxxxxxxxxxxxxxxxx').toString('base64') });
   assert.deepEqual([empty.tables.subscriptions.length, empty.tables.polar_events.length], [0, 0], 'a rejected message leaves no trace at all');
@@ -174,7 +176,7 @@ test('handler: a secret pasted with a trailing newline or spaces still verifies 
 
 test('handler: bad JSON with a good signature is a 400 and leaves no trace', async () => {
   const db = makeWorld();
-  const answer = await handleWebhook(db as any, signed(SECRET, '{not json'), SECRET, NOW);
+  const answer = await handleWebhook(db as any, signed(SECRET, '{not json'), SECRET, NOW, CFG);
   assert.equal(answer.status, 400);
   assert.deepEqual([db.tables.subscriptions.length, db.tables.polar_events.length], [0, 0]);
 });
@@ -285,7 +287,7 @@ test('handler: a late message about the end of an OLD subscription does not swit
 test('handler: an oversized body is refused before anything else; a message without modified_at uses the event time', async () => {
   const db = makeWorld();
   const big = 'x'.repeat(300 * 1024);
-  const answer = await handleWebhook(db as any, signed(SECRET, JSON.stringify({ type: 'subscription.active', pad: big })), SECRET, NOW);
+  const answer = await handleWebhook(db as any, signed(SECRET, JSON.stringify({ type: 'subscription.active', pad: big })), SECRET, NOW, CFG);
   assert.deepEqual(answer, { status: 413, body: { error: 'too_large' } });
   const parsed = parseSubscriptionEvent({ type: 'subscription.active', timestamp: '2026-10-13T12:00:00Z', data: { id: 's1', status: 'active', customer: { id: 'c', external_id: U1 } } }) as any;
   assert.equal(parsed.row.polar_modified_at, '2026-10-13T12:00:00.000Z');
@@ -306,4 +308,103 @@ test('handler: two messages arriving at the same moment, in either order, leave 
     await Promise.all(order.map((event, i) => send(db, event, { id: 'race2-' + i })));
     assert.equal(subOf(db).status, 'canceled');
   }
+});
+
+// ---------------------------------------------------------------- issue #24: product allowlist, outcome log, Polar environment
+test('events: the product of the subscription is read from product_id or product.id, and only as short text', () => {
+  assert.equal((parseSubscriptionEvent(subscriptionEvent({ product_id: undefined, product: { id: 'prod_nested' } })) as any).productId, 'prod_nested');
+  assert.equal((parseSubscriptionEvent(subscriptionEvent({ product_id: 'prod_top', product: { id: 'prod_nested' } })) as any).productId, 'prod_top', 'product_id wins');
+  for (const junk of [undefined, null, 5, '', {}, [], 'x'.repeat(101)]) assert.equal((parseSubscriptionEvent(subscriptionEvent({ product_id: junk, product: undefined })) as any).productId, null, String(junk));
+});
+
+test('handler: only subscriptions of OUR product change anybody\'s access; other products, a missing product and an unconfigured product are never trusted', async () => {
+  const other = makeWorld();
+  assert.deepEqual(await send(other, subscriptionEvent({ product_id: 'prod_of_another_app' })), { status: 200, body: { ignored: 'other_product' } });
+  assert.equal(other.tables.subscriptions.length, 0, 'nothing saved for a foreign product');
+  const none = makeWorld();
+  assert.deepEqual(await send(none, subscriptionEvent({ product_id: undefined })), { status: 200, body: { ignored: 'no_product' } });
+  assert.equal(none.tables.subscriptions.length, 0);
+  for (const config of [{ server: 'sandbox' }, { productId: '', server: 'sandbox' }, { productId: '   ', server: 'sandbox' }, undefined]) {
+    const unconfigured = makeWorld();
+    const answer = await handleWebhook(unconfigured as any, signed(SECRET, JSON.stringify(subscriptionEvent()), { id: 'evt_u' }), SECRET, NOW, config as any);
+    assert.deepEqual(answer, { status: 503, body: { error: 'not_configured' } }, 'Polar retries later; nothing is trusted without our product id');
+    assert.equal(unconfigured.tables.subscriptions.length + unconfigured.tables.polar_events.length, 0);
+  }
+  const ours = makeWorld();
+  assert.deepEqual(await send(ours, subscriptionEvent(), { config: { productId: ` ${PRODUCT}\n`, server: 'sandbox' } }), { status: 200, body: { applied: true } }, 'a pasted newline or space in the product id does not break it');
+  const sameLooking = makeWorld();
+  assert.equal((await send(sameLooking, subscriptionEvent({ product_id: PRODUCT.toUpperCase() }))).body.ignored, 'other_product', 'exact match only');
+});
+
+test('handler: every finished message leaves one outcome row (what happened and why), with no payload, no e-mail and no secret', async () => {
+  const db = makeWorld();
+  await send(db, subscriptionEvent({ customer: { id: 'cus_1', external_id: U1, email: 'secret-person@example.com', name: 'Secret Person' } }), { id: 'evt_a' });
+  await send(db, subscriptionEvent({ product_id: 'prod_other' }), { id: 'evt_b' });
+  await send(db, { type: 'order.paid', data: { id: 'o1', billing_name: 'Another Person' } }, { id: 'evt_c' });
+  const events = db.tables.polar_events;
+  assert.deepEqual(events.map((e: Row) => [e.webhook_id, e.outcome, e.reason ?? null]), [['evt_a', 'applied', null], ['evt_b', 'ignored', 'other_product'], ['evt_c', 'ignored', 'not_a_subscription_event']]);
+  assert.deepEqual([events[0].user_id, events[0].subscription_status, events[0].current_period_end], [U1, 'active', '2026-11-13T08:00:00.000Z']);
+  const allowed = ['webhook_id', 'type', 'outcome', 'reason', 'user_id', 'subscription_status', 'current_period_end'];
+  for (const e of events) assert.deepEqual(Object.keys(e).filter((k) => !allowed.includes(k)), [], 'only whitelisted columns are written');
+  const text = JSON.stringify(events);
+  for (const forbidden of ['secret-person', 'Secret Person', 'Another Person', 'cus_1', SECRET, 'sub_1']) assert.ok(!text.includes(forbidden), `the log must not contain ${forbidden}`);
+});
+
+test('handler: a forged, expired or oversized message leaves no outcome row, and a failed save does not either (Polar retries)', async () => {
+  const db = makeWorld([], { 'subscriptions.insert': true });
+  await send(db, subscriptionEvent(), { id: 'evt_f1', signWith: 'whsec_' + Buffer.from('attacker-secret-xxxxxxxxxxxxxxxxxxxx').toString('base64') });
+  await send(db, subscriptionEvent(), { id: 'evt_f2' }); // the save fails
+  assert.equal(db.tables.polar_events.length, 0);
+});
+
+test('handler: rows are tagged with the Polar environment they come from; only the exact word production means production', async () => {
+  for (const [server, expected] of [['sandbox', 'sandbox'], ['production', 'production'], [undefined, 'sandbox'], ['', 'sandbox'], ['Production', 'sandbox'], ['production\n', 'sandbox'], [' production', 'sandbox'], ['live', 'sandbox']] as const) {
+    const db = makeWorld();
+    await send(db, subscriptionEvent(), { config: { productId: PRODUCT, server } });
+    assert.equal(subOf(db).polar_server, expected, String(JSON.stringify(server)));
+    assert.equal(serverKind(server), expected);
+  }
+});
+
+test('liveRow: a subscription written for the OTHER Polar environment is not a subscription here; manual grants always count; untagged old rows are sandbox', () => {
+  const polar = (polar_server?: string | null) => ({ source: 'polar', status: 'active', polar_server });
+  assert.ok(liveRow(polar('production'), 'production'));
+  assert.ok(liveRow(polar('sandbox'), 'sandbox'));
+  assert.ok(liveRow(polar('sandbox'), undefined), 'unset server = sandbox');
+  assert.equal(liveRow(polar('sandbox'), 'production'), null, 'sandbox test data never grants access in production');
+  assert.equal(liveRow(polar('production'), 'sandbox'), null);
+  assert.equal(liveRow(polar(null), 'production'), null, 'a row from before the tag existed came from the sandbox');
+  assert.equal(liveRow(polar(undefined), 'production'), null);
+  assert.ok(liveRow(polar(undefined), 'sandbox'));
+  assert.equal(liveRow(polar('production'), 'production\n'), null, 'a typo in the server setting falls back to sandbox, the safe side');
+  for (const server of ['sandbox', 'production', undefined]) assert.ok(liveRow({ source: 'manual', status: 'active' }, server), 'manual: ' + server);
+  for (const junk of [null, undefined, 5, 'x', []]) assert.equal(liveRow(junk as any, 'production'), null);
+});
+
+test('handler: in production a leftover SANDBOX row is replaced by the real subscription even when it looks newer; same-environment ordering still holds', async () => {
+  const leftover = { user_id: U1, source: 'polar', status: 'active', plan: 'pro', current_period_end: '2030-01-01T00:00:00.000Z', polar_subscription_id: 'sub_sandbox', polar_modified_at: '2030-01-01T00:00:00.000Z', polar_server: 'sandbox' };
+  const db = makeWorld([{ ...leftover }]);
+  const answer = await send(db, subscriptionEvent({ id: 'sub_real', modified_at: '2026-10-13T08:00:00Z' }), { config: { productId: PRODUCT, server: 'production' } });
+  assert.deepEqual(answer, { status: 200, body: { applied: true } });
+  assert.deepEqual([subOf(db).polar_subscription_id, subOf(db).polar_server], ['sub_real', 'production']);
+  // a late "ended" message about the sandbox subscription cannot switch the real one off
+  const late = await send(db, subscriptionEvent({ id: 'sub_sandbox', status: 'canceled', modified_at: '2026-10-14T08:00:00Z' }, 'subscription.revoked'), { id: 'evt_late', config: { productId: PRODUCT, server: 'production' } });
+  assert.equal(subOf(db).polar_subscription_id, 'sub_real');
+  assert.notEqual(late.status, 500);
+  // inside one environment an older message still cannot undo a newer one
+  const same = makeWorld([{ ...leftover, polar_server: 'production', polar_modified_at: '2026-10-13T10:00:00.000Z', polar_subscription_id: 'sub_1' }]);
+  assert.deepEqual(await send(same, subscriptionEvent({ modified_at: '2026-10-13T09:00:00Z' }), { config: { productId: PRODUCT, server: 'production' } }), { status: 200, body: { ignored: 'older_than_stored' } });
+});
+
+test('handler: nothing the handler prints can contain the secret, the product id of a stranger, e-mails or names', async () => {
+  const lines: string[] = [];
+  const keep = { error: console.error, log: console.log, warn: console.warn };
+  console.error = console.log = console.warn = (...args: unknown[]) => { lines.push(args.map(String).join(' ')); };
+  try {
+    const db = makeWorld([], { 'subscriptions.insert': true });
+    await send(db, subscriptionEvent({ customer: { id: 'cus_1', external_id: U1, email: 'leak-me@example.com', name: 'Leak Me' } }), { id: 'evt_leak' });
+    await send(makeWorld(), subscriptionEvent({ product_id: 'prod_stranger_xyz' }), { id: 'evt_leak2' });
+  } finally { Object.assign(console, keep); }
+  const printed = lines.join('\n');
+  for (const forbidden of [SECRET, 'leak-me@example.com', 'Leak Me', 'prod_stranger_xyz', 'cus_1']) assert.ok(!printed.includes(forbidden), `printed: ${forbidden}`);
 });

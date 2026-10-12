@@ -22,3 +22,18 @@ export function isPro(row: SubscriptionLike | null | undefined, nowMs: number): 
 export function hasProAccess(billingEnforced: unknown, row: SubscriptionLike | null | undefined, nowMs: number): boolean {
   return billingEnforced !== true || isPro(row, nowMs);
 }
+
+// Which Polar world a subscription row belongs to. Only the exact word `production` means production (a typo falls to the safe
+// side: sandbox). Rows written by the webhook carry this tag in `polar_server`; a row without a tag came from before the tag existed,
+// when only the sandbox was in use.
+export type PolarKind = 'sandbox' | 'production';
+export const serverKind = (server: string | undefined | null): PolarKind => (server === 'production' ? 'production' : 'sandbox');
+
+// A subscription row written for the OTHER Polar environment is not a subscription here (sandbox test data must never give Pro
+// in production, and the reverse). The owner's manual grants (`source = 'manual'`) count everywhere.
+export function liveRow<T extends { source?: unknown; polar_server?: unknown }>(row: T | null | undefined, server: string | undefined | null): T | null {
+  if (!row || typeof row !== 'object') return null;
+  if (row.source === 'manual') return row;
+  const tagged: PolarKind = row.polar_server === 'production' ? 'production' : 'sandbox';
+  return tagged === serverKind(server) ? row : null;
+}

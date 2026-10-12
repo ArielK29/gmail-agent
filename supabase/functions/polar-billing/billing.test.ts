@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeDb, type Row } from '../gmail-sync/testkit.ts';
-import { createCheckout, createPortal, polarBase } from './billing.ts';
+import { createCheckout, createPortal, createInfo, polarBase } from './billing.ts';
 
 const NOW = Date.parse('2026-10-13T08:00:00Z');
 const U = '11111111-1111-4111-8111-111111111111';
@@ -115,4 +115,91 @@ test('checkout: a trialing member or one whose payment is being retried (past_du
     assert.deepEqual(await createCheckout(world([{ user_id: U, ...sub }]) as any, user, 'pro', ENV, NOW, polar.fn), { status: 409, body: { error: 'already_subscribed' } }, JSON.stringify(sub));
     assert.equal(polar.calls.length, 0);
   }
+});
+
+// ---------------------------------------------------------------- issue #24: environment tag and the "info" action (environment and price)
+test('checkout: a subscription row of the OTHER Polar environment does not count as "already subscribed"; the same environment and manual grants do', async () => {
+  const live = { status: 'active', current_period_end: '2026-11-13T08:00:00.000Z' };
+  const polar = fakePolar();
+  const sandboxLeftover = await createCheckout(world([{ user_id: U, source: 'polar', polar_server: 'sandbox', ...live }]) as any, user, 'pro', { ...ENV, server: 'production' }, NOW, polar.fn);
+  assert.equal(sandboxLeftover.status, 200, 'sandbox test data must not block a real purchase in production');
+  const sameEnv = await createCheckout(world([{ user_id: U, source: 'polar', polar_server: 'production', ...live }]) as any, user, 'pro', { ...ENV, server: 'production' }, NOW, polar.fn);
+  assert.deepEqual(sameEnv, { status: 409, body: { error: 'already_subscribed' } });
+  const untagged = await createCheckout(world([{ user_id: U, source: 'polar', ...live }]) as any, user, 'pro', ENV, NOW, polar.fn);
+  assert.equal(untagged.status, 409, 'an untagged old row is sandbox, and this IS the sandbox');
+  const manual = await createCheckout(world([{ user_id: U, source: 'manual', ...live, current_period_end: null }]) as any, user, 'pro', { ...ENV, server: 'production' }, NOW, polar.fn);
+  assert.equal(manual.status, 409, 'the owner\'s manual grant counts in every environment');
+});
+
+const PRODUCT_REPLY = { id: 'prod_pro', is_archived: false, recurring_interval: 'month', prices: [{ id: 'price_1', amount_type: 'fixed', price_amount: 1900, price_currency: 'ils', is_archived: false, recurring_interval: 'month' }] };
+function fakePolarGet(json: any = PRODUCT_REPLY, opts: { status?: number; throws?: boolean } = {}) {
+  const calls: Array<{ url: string; init: any }> = [];
+  const fn = (async (url: any, init: any) => {
+    calls.push({ url: String(url), init });
+    if (opts.throws) throw new Error('boom ' + init.headers.Authorization);
+    return new Response(JSON.stringify(json), { status: opts.status ?? 200 });
+  }) as typeof fetch;
+  return { fn, calls };
+}
+
+test('info: tells the page the environment and the price of the product, read from Polar with a GET and the trimmed token', async () => {
+  const polar = fakePolarGet();
+  const answer = await createInfo({ ...ENV, token: ENV.token + '\n', productId: ' prod_pro ' }, polar.fn, NOW, new Map());
+  assert.deepEqual(answer, { status: 200, body: { environment: 'sandbox', price: { amount: 1900, currency: 'ILS', interval: 'month' } } });
+  assert.equal(polar.calls.length, 1);
+  assert.equal(polar.calls[0].url, 'https://sandbox-api.polar.sh/v1/products/prod_pro');
+  assert.equal(polar.calls[0].init.method ?? 'GET', 'GET');
+  assert.equal(polar.calls[0].init.headers.Authorization, `Bearer ${ENV.token}`);
+  assert.equal(polar.calls[0].init.body, undefined, 'a read: nothing is sent');
+  const prod = await createInfo({ ...ENV, server: 'production' }, fakePolarGet().fn, NOW, new Map());
+  assert.equal((prod.body as any).environment, 'production');
+  assert.equal(polarBase('production') + '/products/prod_pro', 'https://api.polar.sh/v1/products/prod_pro');
+  for (const odd of [undefined, '', 'Production', 'production\n', 'live']) assert.equal(((await createInfo({ ...ENV, server: odd }, fakePolarGet().fn, NOW, new Map())).body as any).environment, 'sandbox', String(JSON.stringify(odd)));
+});
+
+test('info: the answer never contains the token, the product id or anything else from Polar', async () => {
+  const noisy = { ...PRODUCT_REPLY, name: 'Gmail Agent Pro', organization_id: 'org_secret', metadata: { token: ENV.token }, prices: [{ ...PRODUCT_REPLY.prices[0], extra: ENV.token }] };
+  const answer = await createInfo(ENV, fakePolarGet(noisy).fn, NOW, new Map());
+  const text = JSON.stringify(answer);
+  for (const forbidden of [ENV.token, 'prod_pro', 'org_secret', 'price_1', 'Gmail Agent Pro']) assert.ok(!text.includes(forbidden), forbidden);
+  assert.deepEqual(Object.keys(answer.body).sort(), ['environment', 'price']);
+});
+
+test('info: the price is remembered for five minutes per product and environment, a failure is never remembered', async () => {
+  const cache = new Map();
+  const polar = fakePolarGet();
+  await createInfo(ENV, polar.fn, NOW, cache); await createInfo(ENV, polar.fn, NOW + 4 * 60_000, cache);
+  assert.equal(polar.calls.length, 1, 'inside five minutes: no second call');
+  await createInfo(ENV, polar.fn, NOW + 5 * 60_000 + 1, cache);
+  assert.equal(polar.calls.length, 2, 'after five minutes: asked again');
+  await createInfo({ ...ENV, productId: 'prod_other' }, polar.fn, NOW, cache);
+  await createInfo({ ...ENV, server: 'production' }, polar.fn, NOW, cache);
+  assert.equal(polar.calls.length, 4, 'another product or environment has its own entry');
+  const failing = fakePolarGet({}, { status: 500 }); const fresh = new Map();
+  assert.deepEqual(await createInfo(ENV, failing.fn, NOW, fresh), { status: 502, body: { error: 'info_failed' } });
+  const healed = fakePolarGet();
+  assert.equal((await createInfo(ENV, healed.fn, NOW + 1000, fresh)).status, 200, 'the next call asks again');
+  assert.equal(healed.calls.length, 1);
+});
+
+test('info: an odd or hostile product answer gives no price (never a made-up one); Polar failing gives a clear 502 that never prints the token', async () => {
+  const noPrice = async (json: any) => assert.deepEqual((await createInfo(ENV, fakePolarGet(json).fn, NOW, new Map())).body, { environment: 'sandbox', price: null }, JSON.stringify(json).slice(0, 90));
+  const withPrice = (over: any) => ({ ...PRODUCT_REPLY, prices: [{ ...PRODUCT_REPLY.prices[0], ...over }] });
+  for (const bad of [{ price_amount: 0 }, { price_amount: -5 }, { price_amount: 1.5 }, { price_amount: '1900' }, { price_amount: null }, { price_amount: 1e9 }, { price_amount: NaN }, { price_currency: 'shekel' }, { price_currency: '' }, { price_currency: 5 }, { amount_type: 'custom' }, { amount_type: 'free' }, { is_archived: true }, { recurring_interval: 'decade' }]) await noPrice(withPrice(bad));
+  for (const junk of [{}, { prices: [] }, { prices: 'x' }, { prices: null }, { prices: [null, 5, 'x'] }, [], null, 'text', 5]) await noPrice(junk);
+  // the first usable (not archived, fixed) price is used, an archived or custom one before it is skipped
+  const many = { ...PRODUCT_REPLY, prices: [{ ...PRODUCT_REPLY.prices[0], is_archived: true, price_amount: 100 }, { ...PRODUCT_REPLY.prices[0], amount_type: 'custom' }, { ...PRODUCT_REPLY.prices[0], price_amount: 2900, price_currency: 'USD', recurring_interval: 'year' }] };
+  assert.deepEqual(((await createInfo(ENV, fakePolarGet(many).fn, NOW, new Map())).body as any).price, { amount: 2900, currency: 'USD', interval: 'year' });
+  // the interval can come from the product itself
+  assert.equal(((await createInfo(ENV, fakePolarGet({ ...PRODUCT_REPLY, recurring_interval: 'year', prices: [{ ...PRODUCT_REPLY.prices[0], recurring_interval: undefined }] }).fn, NOW, new Map())).body as any).price.interval, 'year');
+
+  const lines: string[] = []; const keep = console.error; console.error = (...a: unknown[]) => { lines.push(a.map(String).join(' ')); };
+  try {
+    for (const failing of [fakePolarGet({ detail: 'nope ' + ENV.token }, { status: 401 }), fakePolarGet({}, { status: 500 }), fakePolarGet({}, { throws: true })]) {
+      assert.deepEqual(await createInfo(ENV, failing.fn, NOW, new Map()), { status: 502, body: { error: 'info_failed' } });
+    }
+  } finally { console.error = keep; }
+  assert.ok(!lines.join('\n').includes(ENV.token), 'the token is never printed');
+  assert.equal((await createInfo({ ...ENV, token: undefined }, fakePolarGet().fn, NOW, new Map())).status, 503);
+  assert.equal((await createInfo({ ...ENV, productId: ' ' }, fakePolarGet().fn, NOW, new Map())).status, 503);
 });
