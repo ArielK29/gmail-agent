@@ -33,6 +33,7 @@ import {
   utcDay,
   type Classified,
 } from './logic.ts';
+import { memberHasPro } from './access.ts';
 
 // Gemini (free tier). The optional GEMINI_MODEL secret switches the model without a code change.
 export const MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.5-flash-lite';
@@ -438,6 +439,10 @@ export async function refreshAgenda(admin: SupabaseClient, connection: Connectio
   const wantTasks = connection.has_tasks === true;
   if (!wantEvents && !wantTasks) return;
   if (!shouldRefreshAgenda(connection.agenda_checked_at, nowMs)) return;
+  // Calendar and tasks are a Pro feature. A member who is not Pro (billing enforced) is not asked about at all, and what was saved for them is removed; when the access cannot be decided nothing changes.
+  const pro = await memberHasPro(admin, connection.user_id, nowMs);
+  if (pro === null) return;
+  if (!pro) { await admin.from('gmail_agenda').delete().eq('user_id', connection.user_id); return; }
   // Stamp first: even a failing run must not be repeated at every sync (quota), and a crash below only delays the next try.
   await admin.from('gmail_connections').update({ agenda_checked_at: new Date(nowMs).toISOString() }).eq('user_id', connection.user_id);
 

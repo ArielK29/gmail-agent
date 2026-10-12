@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, agendaBriefing, deadlineLabel, greeting, localDay } = require('./logic.js');
+const { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, agendaBriefing, deadlineLabel, greeting, localDay, planView, isProRow, billingErrorMessage, isPayUrl } = require('./logic.js');
 
 test('authMessage maps the Supabase errors seen in the browser run', () => {
   assert.equal(authMessage({ message: 'Invalid login credentials' }), 'האימייל או הסיסמה שגויים.');
@@ -455,4 +455,52 @@ test('agendaBriefing: a day boundary - 23:30 tonight is today, 00:10 is tomorrow
   const rows = [ev('tonight', L(12, 23, 30), L(12, 23, 55)), ev('after-midnight', L(13, 0, 10), L(13, 1))];
   const b = agendaBriefing(rows, AN, ATODAY);
   assert.deepEqual(b.events.map((e) => e.label), ['היום · 23:30', 'מחר · 00:10']);
+});
+
+// ---- plans and payment (issue #22)
+const PNOW = new Date(2026, 9, 13, 9, 0);
+const proSub = (over = {}) => ({ status: 'active', current_period_end: new Date(2026, 10, 13).toISOString(), cancel_at_period_end: false, source: 'polar', ...over });
+test('planView: while billing is not enforced everybody sees "beta" and no payment buttons', () => {
+  for (const sub of [null, undefined, proSub(), { status: 'canceled' }]) {
+    const v = planView(false, sub, PNOW);
+    assert.deepEqual([v.mode, v.canUpgrade, v.canManage, v.locked], ['beta', false, false, false]);
+  }
+  for (const odd of [undefined, null, 'true', 1]) assert.equal(planView(odd, null, PNOW).mode, 'beta', String(odd));
+});
+
+test('planView: enforced - Free sees the upgrade button and locked features; Pro sees the manage button and the renewal date; cancelled shows the end date', () => {
+  const free = planView(true, null, PNOW);
+  assert.deepEqual([free.mode, free.canUpgrade, free.canManage, free.locked], ['free', true, false, true]);
+  assert.ok(free.text.includes('סיכום יומי'));
+  const pro = planView(true, proSub(), PNOW);
+  assert.deepEqual([pro.mode, pro.canUpgrade, pro.canManage, pro.locked], ['pro', false, true, false]);
+  assert.ok(pro.text.includes('13.11.2026'), pro.text);
+  const cancelled = planView(true, proSub({ cancel_at_period_end: true }), PNOW);
+  assert.ok(cancelled.text.includes('בוטל') && cancelled.text.includes('13.11.2026'));
+  assert.ok(planView(true, proSub({ status: 'past_due' }), PNOW).text.includes('נכשל'));
+  const manual = planView(true, proSub({ source: 'manual', current_period_end: null }), PNOW);
+  assert.deepEqual([manual.mode, manual.canManage], ['pro', false]);
+  assert.equal(planView(true, { status: 'canceled', current_period_end: proSub().current_period_end }, PNOW).mode, 'free');
+  assert.equal(planView(true, proSub({ current_period_end: new Date(2026, 8, 1).toISOString() }), PNOW).mode, 'free', 'a lapsed subscription');
+});
+
+test('the page rule for Pro equals the server rule (entitlement.ts), 3000 random rows and times', async () => {
+  globalThis.Deno ??= { env: { get: () => undefined } };
+  const { isPro } = await import('./../supabase/functions/gmail-sync/entitlement.ts');
+  let seed = 9;
+  const rnd = () => { seed = (seed * 1664525 + 1013904223) % 4294967296; return seed / 4294967296; };
+  const statuses = ['active', 'trialing', 'past_due', 'canceled', 'unpaid', 'incomplete', 'vip', null, 5];
+  for (let n = 0; n < 3000; n++) {
+    const now = Date.UTC(2026, 9, 13) + Math.floor((rnd() - 0.5) * 120 * 86400_000);
+    const end = rnd() < 0.2 ? null : rnd() < 0.1 ? 'garbage' : new Date(Date.UTC(2026, 9, 13) + Math.floor((rnd() - 0.5) * 100 * 86400_000)).toISOString();
+    const row = { status: statuses[Math.floor(rnd() * statuses.length)], current_period_end: end };
+    assert.equal(isProRow(row, now), isPro(row, now), JSON.stringify(row) + ' ' + now);
+  }
+});
+
+test('payment messages and addresses: every server reason has Hebrew text; only https addresses are followed', () => {
+  for (const code of ['not_configured', 'already_subscribed', 'checkout_failed', 'portal_failed', 'no_subscription']) assert.ok(/[\u0590-\u05FF]/.test(billingErrorMessage(code)), code);
+  assert.ok(/[\u0590-\u05FF]/.test(billingErrorMessage('something_new')));
+  assert.equal(isPayUrl('https://sandbox.polar.sh/checkout/abc'), true);
+  for (const bad of ['http://x.example', 'javascript:alert(1)', 'data:text/html,x', '//evil.example', 'https://a b.example', '', null, undefined, 5, 'https://' + 'x'.repeat(2100)]) assert.equal(isPayUrl(bad), false, String(bad).slice(0, 40));
 });

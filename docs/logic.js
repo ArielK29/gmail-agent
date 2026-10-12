@@ -276,6 +276,47 @@
       .sort((a, b) => a.diff - b.diff)
       .map((entry) => ({ ...entry, label: deadlineLabel(entry.diff) }));
     return { events: events.slice(0, BRIEF_MAX), eventMore: Math.max(0, events.length - BRIEF_MAX), tasks: tasks.slice(0, BRIEF_MAX), taskMore: Math.max(0, tasks.length - BRIEF_MAX), empty: events.length === 0 && tasks.length === 0 };
-  }  return { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, agendaBriefing, deadlineLabel, greeting, localDay };
+  }  // ---- Plans and payment (issue #22). The server decides; the page only explains and hides what would be refused. ----
+  const GRACE_MS = 3 * 24 * 3600 * 1000;
+  // The same rule as supabase/functions/*/entitlement.ts (a test compares them).
+  function isProRow(row, nowMs) {
+    if (!row || typeof row !== 'object') return false;
+    const end = typeof row.current_period_end === 'string' ? Date.parse(row.current_period_end) : NaN;
+    const inside = !Number.isFinite(end) || nowMs <= end + GRACE_MS;
+    if (row.status === 'active' || row.status === 'trialing') return inside;
+    if (row.status === 'past_due') return Number.isFinite(end) && nowMs <= end + GRACE_MS;
+    return false;
+  }
+  const dateText = (iso) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`; };
+
+  // What the plan card shows. `enforced` is the server switch (false = the testers phase, everything free); `sub` is the member's row.
+  function planView(enforced, sub, now, environment) {
+    const nowMs = now instanceof Date ? now.getTime() : Date.now();
+    const sandbox = environment !== 'production'; // anything but a real production setting is a test payment
+    if (enforced !== true) return { mode: 'beta', sandbox, title: 'גרסת ניסוי', text: 'בשלב הטסטרים כל התכונות פתוחות וחינמיות.', canUpgrade: false, canManage: false, locked: false };
+    if (isProRow(sub, nowMs)) {
+      const end = sub && sub.current_period_end ? dateText(sub.current_period_end) : '';
+      const manual = Boolean(sub && sub.source === 'manual');
+      const text = manual ? 'הגישה ל-Pro ניתנה לך ידנית.'
+        : sub.cancel_at_period_end ? `המנוי בוטל וימשיך לעבוד עד ${end || 'סוף התקופה'}.`
+        : sub.status === 'past_due' ? 'התשלום האחרון נכשל. עדכן את אמצעי התשלום בניהול המנוי.'
+        : end ? `המנוי מתחדש ב-${end}.` : 'המנוי פעיל.';
+      return { mode: 'pro', sandbox, title: manual ? 'Pro (הענקה ידנית)' : 'מנוי Pro פעיל', text, canUpgrade: false, canManage: !manual, locked: false };
+    }
+    return { mode: 'free', sandbox, title: 'המסלול החינמי', text: 'חינם: סיכום יומי ובריפינג. סריקה והצלבה, יומן ומשימות ומייל בוקר זמינים במנוי Pro.', canUpgrade: true, canManage: false, locked: true };
+  }
+
+  // The server's reason for a refused payment request, in Hebrew.
+  function billingErrorMessage(code) {
+    const texts = {
+      not_configured: 'התשלום עדיין לא זמין. נסה שוב מאוחר יותר.',
+      already_subscribed: 'יש לך כבר מנוי פעיל.',
+      checkout_failed: 'לא הצלחנו לפתוח את דף התשלום. נסה שוב.',
+      portal_failed: 'לא הצלחנו לפתוח את ניהול המנוי. נסה שוב.',
+      no_subscription: 'אין לך מנוי לנהל.',
+    };
+    return texts[code] || 'משהו השתבש. נסה שוב.';
+  }
+  const isPayUrl = (value) => typeof value === 'string' && /^https:\/\/[^\s]+$/.test(value) && value.length <= 2083;  return { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, agendaBriefing, deadlineLabel, greeting, localDay, planView, isProRow, billingErrorMessage, isPayUrl };
 });
 

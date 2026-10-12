@@ -20,6 +20,7 @@ import {
   utcDay,
   validateScanRequest,
 } from './logic.ts';
+import { memberHasPro } from './access.ts';
 import { CHUNK_SIZE, MAX_EMAILS_PER_DAY, askModel, getAccessToken, gmail, readEmail, type EmailInfo } from './sync.ts';
 
 const CLAIM_MS = 60_000; // how long one slice owns the scan
@@ -63,6 +64,9 @@ export async function startScan(admin: SupabaseClient, userId: string, body: unk
   const today = now.toISOString().slice(0, 10);
   const checked = validateScanRequest(body, today);
   if (!checked.ok) return { status: 400, body: { error: checked.error } };
+  const pro = await memberHasPro(admin, userId, now.getTime()); // the scan is a Pro feature (always allowed while billing is not enforced)
+  if (pro === null) return { status: 503, body: { error: 'access_unknown' } };
+  if (!pro) return { status: 402, body: { error: 'pro_required' } };
 
   const { data: connection } = await admin.from('gmail_connections').select('status').eq('user_id', userId).maybeSingle();
   if (!connection) return { status: 409, body: { error: 'not_connected' } };

@@ -97,6 +97,15 @@
     </div>
   </section>
 
+  <section id="planCard" class="card hidden" aria-labelledby="planTitle">
+    <strong id="planTitle"></strong>
+    <div id="planText" class="status"></div>
+    <div id="planSandbox" class="warn hidden" role="note">תשלום ניסיוני: זו סביבת בדיקה ואין חיוב אמיתי. אפשר להשתמש בכרטיס הבדיקה של Polar.</div>
+    <button id="planUpgrade" type="button" class="hidden">שדרג ל-Pro</button>
+    <button id="planManage" type="button" class="secondary hidden">ניהול המנוי</button>
+    <div id="planStatus" class="status" role="status"></div>
+  </section>
+
   <section id="briefCard" class="card hidden" aria-labelledby="briefTitle">
     <strong id="briefTitle">בוקר טוב: מה כדאי לראות עכשיו</strong>
     <div id="briefNew" class="status"></div>
@@ -120,6 +129,7 @@
   <section id="scanCard" class="card hidden" aria-labelledby="scanTitle">
     <strong id="scanTitle">סריקה והצלבה</strong>
     <p class="status">חפש במיילים ישנים (למשל חודש מסוים) ובדוק אילו מהדברים שברשימה שלך מופיעים בהם.</p>
+    <p id="scanLock" class="status hidden">הסריקה וההצלבה זמינות במנוי Pro.</p>
     <form id="scanForm" novalidate>
       <label for="scanFrom">מתאריך</label>
       <input id="scanFrom" type="date" />
@@ -164,12 +174,12 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js"></script>
-<script src="logic.js?v=20261012c"></script>
+<script src="logic.js?v=20261013a"></script>
 <script>
   // config.js defines window.APP_CONFIG = { supabaseUrl, supabaseKey } (the publishable key; never a secret key).
   const { supabaseUrl, supabaseKey } = window.APP_CONFIG;
   const logic = window.AgentLogic; // Hebrew messages and validation, tested in Node (docs/logic.test.js)
-  const LOGIC_FUNCTIONS = ['authMessage', 'validateCredentials', 'problemMessage', 'emptyStateText', 'dailySummary', 'summaryHeadline', 'urgentHeadline', 'safeText', 'morningBriefing', 'greeting', 'localDay', 'scanErrorMessage', 'parseItemsText', 'validateScanForm', 'scanProgressText', 'rollupItems', 'lastFullMonth', 'agendaBriefing'];
+  const LOGIC_FUNCTIONS = ['authMessage', 'validateCredentials', 'problemMessage', 'emptyStateText', 'dailySummary', 'summaryHeadline', 'urgentHeadline', 'safeText', 'morningBriefing', 'greeting', 'localDay', 'scanErrorMessage', 'parseItemsText', 'validateScanForm', 'scanProgressText', 'rollupItems', 'lastFullMonth', 'agendaBriefing', 'planView', 'isPayUrl', 'billingErrorMessage'];
   if (!logic || LOGIC_FUNCTIONS.some((name) => typeof logic[name] !== 'function')) {
     // An old cached copy of logic.js: ask for a fresh page once instead of showing a broken one.
     let already = false; try { already = Boolean(sessionStorage.getItem('logicReload')); sessionStorage.setItem('logicReload', '1'); } catch { already = true; }
@@ -197,6 +207,8 @@
 
   // All text from emails is put on the page with textContent (never as HTML).
   let allRows = [];
+  let planChecked = false; // the plan has been read at least once in this page load
+  let planLocked = false; // billing is enforced and this member is not Pro: Pro-only parts are hidden (the server refuses them anyway)
   let allAgenda = []; // the member's calendar events and tasks (gmail_agenda)
   let agendaFlags = { calendar: false, tasks: false }; // which optional permissions the member gave
   let connectionState = { connected: false, expired: false };
@@ -255,6 +267,49 @@
     renderBriefing();
   }
 
+  // The plan card. enforced false = the testers phase: everything is free and no payment buttons are shown.
+  function renderPlan(settings, sub) {
+    const value = (key) => { const found = (Array.isArray(settings) ? settings : []).find((row) => row && row.key === key); return found ? found.value : undefined; };
+    const view = logic.planView(value('billing_enforced') === true, sub, new Date(), value('polar_environment'));
+    planLocked = view.locked; planChecked = true;
+    show($('planCard'), true);
+    $('planTitle').textContent = view.title; $('planText').textContent = view.text;
+    show($('planUpgrade'), view.canUpgrade); show($('planManage'), view.canManage);
+    show($('planSandbox'), view.mode !== 'beta' && view.sandbox && (view.canUpgrade || view.canManage));
+  }
+  async function callBilling(action) {
+    const { data, error } = await db.functions.invoke('polar-billing', { body: action === 'checkout' ? { action, plan: 'pro' } : { action } });
+    if (error) {
+      let code = '';
+      try { code = (await error.context.json()).error || ''; } catch { code = ''; }
+      throw new Error(code || 'unknown');
+    }
+    return data;
+  }
+  async function goToPolar(action, button) {
+    button.disabled = true; $('planStatus').textContent = 'פותח...';
+    try {
+      const answer = await callBilling(action);
+      if (!logic.isPayUrl(answer && answer.url)) throw new Error('bad_url');
+      window.location.href = answer.url; // Polar's own page: the card details never touch this site
+    } catch (error) {
+      button.disabled = false; $('planStatus').textContent = logic.billingErrorMessage(error && error.message);
+    }
+  }
+  $('planUpgrade').addEventListener('click', () => goToPolar('checkout', $('planUpgrade')));
+  $('planManage').addEventListener('click', () => goToPolar('portal', $('planManage')));
+  // Back from Polar's payment page: the webhook may need a few seconds, so look again a few times.
+  let billingPolls = 0;
+  function checkBillingReturn() {
+    let back = false;
+    try { const url = new URL(window.location.href); back = url.searchParams.get('billing') === 'success'; if (back) { url.searchParams.delete('billing'); window.history.replaceState(null, '', url.toString()); } } catch { back = false; }
+    if (!back) return;
+    $('planStatus').textContent = 'תודה! מעדכנים את המנוי...';
+    const again = () => { if (!planChecked && billingPolls < 6) { billingPolls++; window.setTimeout(again, 1000); return; } if (++billingPolls > 9 || !planLocked) { $('planStatus').textContent = planLocked ? 'התשלום עדיין בעיבוד. רענן את הדף בעוד רגע.' : 'המנוי פעיל. תודה!'; return; } refresh().then(() => window.setTimeout(again, 3000)); };
+    window.setTimeout(again, 2000);
+  }
+  checkBillingReturn();
+
   // The e-mail briefing switch. The member writes only digest_email and digest_tz (the database allows nothing else); the
   // server sends the mail to the member's own Google address between 07:00 and 12:00 in this time zone, only if there is something to show.
   let digestUser = null;
@@ -306,9 +361,10 @@
   // Morning briefing: deadlines, mails that probably wait for my answer, what is new since my last visit (kept in this browser).
   function renderBriefing() {
     const card = $('briefCard');
-    const wantsAgenda = connectionState.connected && !connectionState.expired && !(agendaFlags.calendar && agendaFlags.tasks);
-    show(card, allRows.length > 0 || allAgenda.length > 0 || wantsAgenda);
-    if (allRows.length === 0 && allAgenda.length === 0 && !wantsAgenda) return;
+    const wantsAgenda = !planLocked && connectionState.connected && !connectionState.expired && !(agendaFlags.calendar && agendaFlags.tasks);
+    const agendaRows = planLocked ? [] : allAgenda;
+    show(card, allRows.length > 0 || agendaRows.length > 0 || wantsAgenda);
+    if (allRows.length === 0 && agendaRows.length === 0 && !wantsAgenda) return;
     // The baseline is read ONCE per page load (the previous visit); every later redraw (a token refresh, a tab focus) keeps it,
     // so the counter does not reset itself while the page is open.
     if (visitBaseline === undefined) {
@@ -338,7 +394,7 @@
     fill($('briefDeadlines'), 'מועדים קרובים', brief.deadlines, brief.deadlineMore, (n) => `ועוד ${n} מועדים ברשימה למטה.`, (entry) => `מועד אחרון: ${entry.row.due_date} (${entry.label})`);
     fill($('briefReplies'), 'ייתכן שצריך לענות', brief.replies, brief.replyMore, (n) => `ועוד ${n} מיילים שממתינים לתשובה.`, (entry) => `ממתין לתשובה שלך (${entry.label})`);
     // Calendar and tasks (their own rows, written by the server for members who ticked the permission).
-    const agenda = logic.agendaBriefing(allAgenda, now, logic.localDay(now));
+    const agenda = logic.agendaBriefing(agendaRows, now, logic.localDay(now));
     const agendaFill = (box, title, entries, more, moreText) => {
       box.textContent = '';
       if (entries.length === 0) return;
@@ -517,7 +573,7 @@
   function clearMemberData() {
     allRows = [];
     allAgenda = []; agendaFlags = { calendar: false, tasks: false };
-    renderDigestEmail(null);
+    renderDigestEmail(null); planLocked = false; planChecked = false; show($('planCard'), false); $('planStatus').textContent = '';
     connectionState = { connected: false, expired: false };
     for (const id of ['digest', 'summaryUrgent', 'summaryHeadline', 'summaryCategories', 'summaryNote', 'digestCount', 'connection']) $(id).textContent = '';
     $('search').value = ''; $('filterCategory').value = ''; $('filterUrgency').value = '';
@@ -538,6 +594,8 @@
       if (!signedIn) { clearMemberData(); return; }
 
       const connectionResult = await db.from('gmail_connections').select('user_id, google_email, last_checked_at, status, has_calendar, has_tasks, digest_email, digest_last_sent_on, digest_failures').maybeSingle();
+      const settingsResult = await db.from('app_settings').select('key, value').in('key', ['billing_enforced', 'polar_environment']);
+      const subResult = await db.from('subscriptions').select('status, current_period_end, cancel_at_period_end, source').maybeSingle();
       const agendaResult = await db.from('gmail_agenda').select('kind, external_id, title, starts_at, ends_at, all_day, day').limit(200);
       const digestResult = await db.from('gmail_digest').select('id, from_name, subject, category, summary, urgency, suggested_action, received_at, due_date, needs_reply, handled_at')
         .order('received_at', { ascending: false }).limit(DIGEST_LIMIT);
@@ -556,7 +614,8 @@
           ? `מחובר: ${connection.google_email || 'Gmail'}${connection.last_checked_at ? ' · נבדק לאחרונה ' + new Date(connection.last_checked_at).toLocaleString('he-IL') : ''}`
           : 'Gmail עדיין לא מחובר.';
       show($('connect'), !connected || expired); show($('check'), connected && !expired); show($('disconnect'), connected);
-      renderDigestEmail(connected && !expired ? connection : null);
+      renderPlan(settingsResult.error ? [] : settingsResult.data, subResult.error ? null : subResult.data); // a failed read never locks anything: the server decides
+      renderDigestEmail(connected && !expired && !planLocked ? connection : null);
 
       allRows = digestResult.data || [];
       allAgenda = agendaResult.data || [];
@@ -565,6 +624,7 @@
       renderSummary();
       renderDigest();
       show($('scanCard'), connected && !expired);
+      show($('scanLock'), planLocked); show($('scanForm'), !planLocked);
       if (connected && !expired) loadScan(); else { driving = null; }
     } catch {
       // A network failure while loading: say so, never leave the page silently half empty.

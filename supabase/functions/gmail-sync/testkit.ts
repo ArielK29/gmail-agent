@@ -9,6 +9,12 @@ const UPSERT_KEYS: Record<string, string[]> = {
   gmail_digest: ['user_id', 'gmail_message_id'],
   gmail_usage: ['user_id', 'day'],
   gmail_scan_hits: ['scan_id', 'gmail_message_id'],
+  subscriptions: ['user_id'],
+};
+// Unique constraints the fake database enforces (a duplicate gives the Postgres error code 23505), like the real tables.
+export const UNIQUE: Record<string, string[][]> = {
+  polar_events: [['webhook_id']],
+  subscriptions: [['user_id'], ['polar_subscription_id']],
 };
 const DEFAULTS: Record<string, () => Row> = {
   gmail_scans: () => ({ status: 'queued', listed: false, total: 0, processed: 0, pending_ids: [], claimed_until: null, error: null, finished_at: null, created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30 * 86400000).toISOString() }),
@@ -56,6 +62,7 @@ export function makeDb(tables: Record<string, Row[]>, failing: Record<string, an
           if (action === 'insert') {
             for (const item of [].concat(payload)) {
               const row = { ...(DEFAULTS[name]?.() ?? {}), ...item };
+              if ((UNIQUE[name] ?? []).some((cols) => cols.every((c) => row[c] != null) && table.some((other) => cols.every((c) => other[c] === row[c])))) return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint' } };
               table.push(row);
               selected.push(row);
             }
@@ -67,6 +74,7 @@ export function makeDb(tables: Record<string, Row[]>, failing: Record<string, an
             const keys = String(options?.onConflict ?? '').split(',').filter(Boolean).length ? String(options.onConflict).split(',') : UPSERT_KEYS[name] ?? [];
             for (const item of [].concat(payload)) {
               const existing = table.find((row) => keys.every((column) => row[column] === item[column]));
+              if ((UNIQUE[name] ?? []).some((cols) => cols.every((c) => item[c] != null) && table.some((other) => other !== existing && cols.every((c) => other[c] === item[c])))) return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint' } };
               if (existing) { Object.assign(existing, item); selected.push(existing); } else { const row = { ...(DEFAULTS[name]?.() ?? {}), ...item }; table.push(row); selected.push(row); }
             }
           }

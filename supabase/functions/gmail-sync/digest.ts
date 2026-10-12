@@ -5,6 +5,7 @@
 // sends nothing; a failure gives the day back so it is tried again, and after MAX_FAILURES permanent refusals in a row the
 // agent stops trying; without a configured sending service nothing happens at all (no failure is counted).
 import type { SupabaseClient } from 'npm:@supabase/supabase-js@2';
+import { memberHasPro, membersWithPro } from './access.ts';
 import { MAX_FAILURES, buildBrief, composeEmail, composeTestEmail, isDeliverable, isDueForDigest, localParts, safeTz } from './briefing.ts';
 
 export type SendResult = { ok: true } | { skip: 'not_configured' } | { fail: 'transient' | 'permanent' };
@@ -37,8 +38,11 @@ export async function sendDigests(admin: SupabaseClient, nowMs: number, send: Se
     .eq('digest_email', true)
     .eq('status', 'active')
     .limit(max);
-  for (const connection of (connections ?? []) as any[]) {
-    if (!isDueForDigest(connection, nowMs)) continue;
+  const due = ((connections ?? []) as any[]).filter((connection) => isDueForDigest(connection, nowMs));
+  const pro = await membersWithPro(admin, due.map((connection) => connection.user_id), nowMs); // the e-mail is a Pro feature
+  if (pro === null) return run; // the access cannot be decided right now: nobody is mailed, nothing is claimed
+  for (const connection of due) {
+    if (!pro.has(connection.user_id)) continue;
     const tz = safeTz(connection.digest_tz);
     const day = localParts(nowMs, tz).day;
     // Claim the day: whoever changes the row first sends, the other run finds 0 rows and does nothing.
@@ -82,6 +86,9 @@ export const TEST_COOLDOWN_MS = 10 * 60 * 1000;
 // Called with the member's own session. Sends the briefing (or a short note) to the member's own Google address, at most once
 // per 10 minutes (the time is claimed with one conditional update, so a double click or two tabs send once).
 export async function sendTestDigest(admin: SupabaseClient, userId: string, nowMs: number, send: Sender = sendEmail): Promise<{ status: number; body: Record<string, unknown> }> {
+  const pro = await memberHasPro(admin, userId, nowMs);
+  if (pro === null) return { status: 503, body: { error: 'access_unknown' } };
+  if (!pro) return { status: 402, body: { error: 'pro_required' } };
   const { data: connection } = await admin.from('gmail_connections').select('user_id, google_email, status, digest_tz, digest_test_at').eq('user_id', userId).maybeSingle();
   if (!connection) return { status: 409, body: { error: 'not_connected' } };
   if (connection.status === 'needs_reconnect') return { status: 409, body: { error: 'needs_reconnect' } };
