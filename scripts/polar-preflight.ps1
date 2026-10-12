@@ -1,0 +1,5 @@
+# Read-only pre-flight of the Polar SANDBOX organization through the authenticated sandbox MCP server (changes nothing).
+# No double quotes inside the prompt (Windows PowerShell 5.1 breaks them when calling a program).
+$claude = 'C:\Users\Korman\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude-code\2.1.295\d2e29494ec83\claude.exe'
+$prompt = 'Read only, change nothing, never print a token or secret. For the Polar SANDBOX organization duofit-polar report in a short table: (1) organization settings that matter for subscriptions: allow_multiple_subscriptions, benefit_revocation_grace_period, customer e-mail settings or any subscription related setting you can read; (2) the webhook endpoints with their enabled events and API version (id and url only, never the secret); (3) the product Gmail Agent Pro: id, price, currency, interval, trial settings, whether it is archived; (4) how many customers, subscriptions and orders exist. If a field cannot be read with the available tools, say so.'
+& $claude -p $prompt --allowedTools 'mcp__polar-sandbox'
