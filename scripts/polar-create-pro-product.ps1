@@ -1,0 +1,6 @@
+# Fixes/creates the Pro subscription product in the Polar SANDBOX (no real money) through the Polar sandbox MCP server.
+# Price: 19 ILS per month (1900 agorot). Prints the product id (needed as POLAR_PRODUCT_ID in Supabase).
+# Note: no double quotes inside the prompt (Windows PowerShell 5.1 breaks them when calling a program).
+$claude = 'C:\Users\Korman\AppData\Local\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude\claude-code\2.1.295\d2e29494ec83\claude.exe'
+$prompt = 'In the Polar SANDBOX organization duofit-polar there is one product with id c0a5bcf3-700a-4076-9eed-9b3d542be0fb. It was created with a wrong name and a free price. Update THAT product (do not create a new one): name = Gmail Agent Pro; recurring subscription, billing interval every 1 month; replace the free price with ONE fixed price of 1900 in the smallest currency unit, currency ILS (that is 19.00 ILS per month); description = Scan and cross-check, calendar and tasks, and the morning e-mail briefing for the Gmail agent. Change nothing else and do not touch organization settings. Afterwards read the product back and print only: product id, name, price amount and currency, billing interval, and whether it is archived.'
+& $claude -p $prompt --allowedTools 'mcp__polar-sandbox'

@@ -63,3 +63,8 @@ Before turning payments on for real: every member who should keep Pro must have 
 - Organization name `Gmail Agent`, slug `gmail-agent` (or `gmail-agent-ariel` if taken), type Individual, software / SaaS, pricing model Subscription.
 - **Default payment currency: Israeli New Shekel (ILS)**, chosen by the owner (not US Dollar). Suggested Pro price: about 19 ILS per month (roughly 5 USD); the price is set in Polar, never in the code.
 - The Polar SANDBOX MCP server (`polar-sandbox`, https://mcp.polar.sh/mcp/polar-sandbox) is installed in the owner's Claude Code user configuration and in the project file `.mcp.json`. It needs the owner's one-time OAuth sign-in (`/mcp`). The production server is deliberately not installed.
+## Polar sandbox state (2026-10-12)
+- The Polar SANDBOX MCP server is authenticated (OAuth done by the owner in the browser). The CLI used for it lives in the Claude desktop package folder, so `claude` is not on the PATH of the terminal panel; the helper scripts in `scripts/` call it by full path.
+- Sandbox organization in use for the tests: `duofit-polar` (created by the owner on 2026-10-12, default currency ILS). Before production a proper organization for the Gmail agent should be created (name, support e-mail, product URL).
+- Sandbox product `Gmail Agent Pro`: id `c0a5bcf3-700a-4076-9eed-9b3d542be0fb`, recurring every 1 month, fixed price 19.00 ILS. The id is not a secret; it is the value of the Supabase secret `POLAR_PRODUCT_ID` (the owner sets the secrets).
+- Windows PowerShell 5.1 breaks double quotes inside a prompt passed to a program: keep helper prompts free of double quotes (see `scripts/polar-create-pro-product.ps1`).
