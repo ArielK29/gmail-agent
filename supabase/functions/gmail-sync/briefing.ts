@@ -106,7 +106,8 @@ export function buildBrief(mails: unknown, agenda: unknown, nowMsIn: number, tz:
     const end = row.ends_at ? new Date(row.ends_at).getTime() : NaN;
     if (Number.isFinite(end) ? end <= nowMs : start < nowMs - 3600_000) continue;
     const day = dayOf(start);
-    if (day !== today && day !== tomorrow) continue;
+    const running = start <= nowMs && Number.isFinite(end) && end > nowMs; // an overnight or multi-day event that started before today is still on
+    if (!running && day !== today && day !== tomorrow) continue;
     events.push({ row, sort: start / 60000, label: start <= nowMs ? `עכשיו · עד ${Number.isFinite(end) ? clockOf(end) : '?'}` : `${word(day)} · ${clockOf(start)}` });
   }
   events.sort((a, b) => a.sort - b.sort);

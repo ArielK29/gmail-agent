@@ -269,3 +269,27 @@ Deployed: `polar-webhook` v1 (no login; the proof is Polar's signature), `polar-
 | Browser (real deployed functions, throw-away member, billing switched on for a minute) | Free: plan card "המסלול החינמי", upgrade button, sandbox note, scan locked, calendar/tasks and e-mail switch hidden, the upgrade button answered "payment not available yet"; Pro: "מנוי Pro פעיל, מתחדש ב-11.11.2026", manage button, scan open, calendar visible, manage answered the same message; no horizontal scroll; the switch was set back to false and the member deleted (the owner's data untouched: connection active, 70 summaries) | pass |
 
 Not verified: anything that needs a real Polar account: creating a checkout, paying with the sandbox test card, receiving a real signed webhook, the customer portal. Everything up to Polar's door is tested with fakes shaped like Polar's documented answers.
+
+## Two deep review passes over the work of 2026-10-12 and 13 (done alone, while the owner was away)
+Method: read every changed file again line by line, ask "what happens in the real world when this fails halfway, arrives twice, arrives late, or is used by the wrong person", write the failing test first, fix, run all tests, run deliberate-breakage checks, deploy, probe the live functions, confirm the owner's account is untouched.
+
+| # | Finding (pass) | Risk | Fix | Test |
+|---|---|---|---|---|
+| 1 | The webhook recorded the message id BEFORE saving, so a crash between the two would turn Polar's retry into a "duplicate" and a payment would be lost (1) | high | only finished messages are recorded; save is retried by Polar | failed-save and unfinished-message tests |
+| 2 | Two webhook messages arriving at the same moment could leave the OLDER one on top (2) | medium | order-safe write: one conditional update (`modified_at <= incoming`), insert-then-update on a race | race test in both orders, with and without an existing row |
+| 3 | A late "ended" message of an OLD subscription could switch off a NEWER live one (2) | medium | ignored while another live subscription is held | two tests |
+| 4 | A member whose payment was being retried (`past_due`) or trialing could buy a second subscription (1) | medium | any live status blocks a new checkout | test |
+| 5 | A scan that was already running kept going after the subscription ended (1) | low | the scan stops with "pro_required" (and waits when the access cannot be read) | test |
+| 6 | Free members were still asked for calendar and tasks permissions they cannot use (1) | privacy | `gmail-connect` asks for Gmail only unless the member may use the rest | scope tests |
+| 7 | With more than 50 opted-in members the morning e-mail could always pick the same 50 (1) | low | ordered by "mailed longest ago"; the fake database now sorts nulls like Postgres | order test |
+| 8 | An all-day event lasting several days showed only on its first day; an overnight event disappeared after midnight (1) | medium (wrong briefing) | one row per relevant day; running events always count (server and page) | parse tests, page tests, 400 random worlds page = e-mail |
+| 9 | Oversized webhook bodies were read before the signature check (1) | low | 413 above 256 KB, checked on the header and on the text | test |
+| 10 | The payment page address from the server was only checked for https (2) | low | only `polar.sh` and its sub-domains are followed (server and page) | look-alike address tests |
+| 11 | A failed read of the billing switch made the page show "beta" although the server might enforce (2) | UI honesty | the plan card is hidden and nothing is locked when the switch cannot be read | by design, browser-checked earlier |
+| 12 | The page stayed stuck on "opening..." after coming back from Polar with the back button (2) | UX | `pageshow` re-enables the buttons | by reading |
+| 13 | The e-mail sender name was Hebrew (some mail services refuse non-ASCII display names) (2) | delivery | ASCII default `Gmail Agent <onboarding@resend.dev>` | by reading |
+| 14 | Resend's sandbox sender may only mail the address of the Resend account itself (2) | would look like a bug | written in `docs/BILLING.md` and the deferred list | n/a |
+| 15 | Deleting a member does not cancel the Polar subscription (2) | money | written as a known gap with the exact decision needed (`docs/BILLING.md`) | n/a |
+| 16 | Test bugs found on the way: a fixture shared between two tests, a fake database that ordered nulls wrongly, a lost template literal and a stray control character from my own shell commands (all caught by tests or by a control-character scan of the repository) | none | fixed | scan is clean |
+
+Results after both passes: 232 unit tests pass; 11 more deliberate breakages (no duplicate shortcut, old subscription switches off the new one, no size limit, failed save recorded as done, past_due can buy twice, running scan not stopped, Free asked for calendar permission, digest order removed, all-day events saved for all days, overnight events dropped on the server and on the page) every one made tests fail; deployed gmail-sync v20, polar-webhook v2, polar-billing v2, gmail-connect v5; live probes: scheduled run 200 with the digests block, unsigned webhook 503 (no secret yet, so nothing is trusted), garbage tokens 401; the owner's connection stayed active, 70 summaries intact, billing still off, manual Pro grant in place.

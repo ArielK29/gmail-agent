@@ -19,7 +19,7 @@ export const sendEmail: Sender = async ({ to, subject, html, text, key }) => {
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json', 'Idempotency-Key': key },
-      body: JSON.stringify({ from: Deno.env.get('EMAIL_FROM') ?? 'סוכן Gmail <onboarding@resend.dev>', to: [to], subject, html, text }),
+      body: JSON.stringify({ from: Deno.env.get('EMAIL_FROM') ?? 'Gmail Agent <onboarding@resend.dev>', to: [to], subject, html, text }),
     });
     if (response.ok) return { ok: true };
     return { fail: response.status === 429 || response.status >= 500 ? 'transient' : 'permanent' };
@@ -37,6 +37,7 @@ export async function sendDigests(admin: SupabaseClient, nowMs: number, send: Se
     .select('user_id, google_email, status, digest_email, digest_tz, digest_last_sent_on, digest_failures')
     .eq('digest_email', true)
     .eq('status', 'active')
+    .order('digest_last_sent_on', { ascending: true, nullsFirst: true }) // whoever was mailed longest ago comes first
     .limit(max);
   const due = ((connections ?? []) as any[]).filter((connection) => isDueForDigest(connection, nowMs));
   const pro = await membersWithPro(admin, due.map((connection) => connection.user_id), nowMs); // the e-mail is a Pro feature

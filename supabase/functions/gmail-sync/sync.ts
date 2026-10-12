@@ -394,7 +394,7 @@ async function fetchEvents(accessToken: string, nowMs: number): Promise<Fetched>
   const answer = await googleGet(`${CAL_URL}?${params}`, accessToken);
   if (isMissingPermission(answer.status, answer.body)) return { missing: true };
   if (answer.status !== 200) return { skip: true };
-  return { rows: parseEvents(answer.body) };
+  return { rows: parseEvents(answer.body, nowMs) };
 }
 
 async function fetchTasks(accessToken: string, nowMs: number): Promise<Fetched> {

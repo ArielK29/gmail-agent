@@ -6,7 +6,7 @@ import { makeDb, rng, type Row } from './testkit.ts';
 
 const env: Record<string, string> = { GOOGLE_CLIENT_ID: 'id', GOOGLE_CLIENT_SECRET: ['fake', 'test', 'value'].join('-'), GEMINI_API_KEY: 'key' };
 (globalThis as any).Deno = { env: { get: (name: string) => env[name] } };
-const { startScan } = await import('./scan.ts');
+const { startScan, stepScan } = await import('./scan.ts');
 const { refreshAgenda } = await import('./sync.ts');
 const { sendDigests, sendTestDigest } = await import('./digest.ts');
 const { memberHasPro, membersWithPro } = await import('./access.ts');
@@ -134,4 +134,35 @@ test('chaos: random billing state and random failures - a Free member never reac
     await sendDigests(w as any, NOW, sent.send as any);
     assert.equal(sent.sent.length === 1, expectPro, `seed ${seed}: e-mail`);
   }
+});
+
+test('a scan that is already running stops with "pro_required" when the subscription lapses, and waits when the access cannot be decided', async () => {
+  const w = world({ enforced: true, subs: PRO.map((row) => ({ ...row })) }); // copies: this test changes the rows
+  const started = await startScan(w as any, U, SCAN_BODY, new Date(NOW));
+  assert.equal(started.status, 200);
+  const id = (started.body as { id: string }).id;
+  w.tables.app_settings[0].value = true;
+  w.tables.subscriptions[0].status = 'canceled'; // the subscription ended meanwhile
+  const stopped = await stepScan(w as any, id, U, NOW);
+  assert.deepEqual([stopped?.status, stopped?.error], ['failed', 'pro_required']);
+
+  const w2 = world({ enforced: true, subs: PRO.map((row) => ({ ...row })) });
+  const id2 = ((await startScan(w2 as any, U, SCAN_BODY, new Date(NOW))).body as { id: string }).id;
+  w2.failing['app_settings.select'] = true;
+  const waiting = await stepScan(w2 as any, id2, U, NOW);
+  assert.notEqual(waiting?.status, 'failed', 'an undecidable access never kills a scan');
+  assert.match(String(waiting?.error), /access_unknown/);
+});
+
+test('e-mail briefing: when more members are opted in than one run handles, whoever was mailed longest ago goes first', async () => {
+  const db = makeDb({
+    app_settings: [{ key: 'billing_enforced', value: false }],
+    subscriptions: [],
+    gmail_connections: ['a', 'b', 'c'].map((u, i) => ({ user_id: u, status: 'active', digest_email: true, digest_tz: 'Asia/Jerusalem', digest_last_sent_on: i === 0 ? '2026-10-11' : i === 1 ? null : '2026-10-10', digest_failures: 0, google_email: `${u}@example.com` })),
+    gmail_digest: ['a', 'b', 'c'].map((u) => ({ ...mailRow(), user_id: u, gmail_message_id: 'm-' + u })),
+    gmail_agenda: [],
+  });
+  const s = sender();
+  await sendDigests(db as any, NOW, s.send as any, 2); // a run that can only handle two members
+  assert.deepEqual(s.sent.sort(), ['b@example.com', 'c@example.com'], 'never mailed first, then the oldest');
 });

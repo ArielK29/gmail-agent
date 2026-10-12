@@ -102,7 +102,7 @@ export function parseSubscriptionEvent(payload: unknown): Parsed {
       cancel_at_period_end: data.cancel_at_period_end === true,
       polar_customer_id: shortText(data.customer?.id) ?? shortText(data.customer_id),
       polar_subscription_id: subscriptionId,
-      polar_modified_at: iso(data.modified_at) ?? iso(data.created_at),
+      polar_modified_at: iso(data.modified_at) ?? iso(data.created_at) ?? iso(event.timestamp),
     },
   };
 }

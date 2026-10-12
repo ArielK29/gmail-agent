@@ -72,7 +72,7 @@ test('the e-mail lists equal the page lists (the same rules, 400 random worlds, 
       if (kind === 'task') return { kind, title: 'T' + i, day: pick([day(-40), day(-1), day(0), day(5), day(9)]) };
       if (r() < 0.3) return { kind, title: 'D' + i, all_day: true, day: pick([day(-1), day(0), day(1), day(2)]) };
       const start = now.getTime() + (r() * 80 - 20) * 3600_000;
-      return { kind, title: 'E' + i, all_day: false, starts_at: new Date(start).toISOString(), ends_at: r() < 0.8 ? new Date(start + r() * 3 * 3600_000).toISOString() : null };
+      return { kind, title: 'E' + i, all_day: false, starts_at: new Date(start).toISOString(), ends_at: r() < 0.8 ? new Date(start + r() * (r() < 0.3 ? 40 : 3) * 3600_000).toISOString() : null }; // some events last a day and a half
     });
     const ours = buildBrief(mails, agenda, now.getTime(), tz);
     const todayLocal = page.localDay(new Date(now.getTime()));

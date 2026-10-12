@@ -119,6 +119,24 @@ test('fuzz: 3000 random Google answers never throw and every row satisfies the d
   }
 });
 
+test('events: an all-day event that lasts several days is saved for every day that matters now (yesterday to the day after tomorrow), without a clock only once', () => {
+  const trip = { id: 'trip', summary: 'Trip', start: { date: '2026-10-12' }, end: { date: '2026-10-16' } }; // Monday to Thursday, the end day is exclusive
+  const rows = parseEvents({ items: [trip, allDay('single', '2026-10-13')] }, Date.parse('2026-10-13T09:00:00Z'));
+  assert.deepEqual(rows.filter((r) => r.external_id.startsWith('trip')).map((r) => [r.external_id, r.day]), [['trip:2026-10-12', '2026-10-12'], ['trip:2026-10-13', '2026-10-13'], ['trip:2026-10-14', '2026-10-14'], ['trip:2026-10-15', '2026-10-15']]);
+  assert.deepEqual(rows.filter((r) => r.external_id === 'single').length, 1, 'a one-day event keeps its plain id');
+  const late = parseEvents({ items: [trip] }, Date.parse('2026-10-20T09:00:00Z'));
+  assert.deepEqual(late, [], 'a trip that is over is not saved');
+  const early = parseEvents({ items: [trip] }, Date.parse('2026-10-10T09:00:00Z'));
+  assert.deepEqual(early.map((r) => r.day), ['2026-10-12'], 'a trip starting the day after tomorrow shows only its first day for now');
+  assert.deepEqual(parseEvents({ items: [trip] }, Date.parse('2026-10-09T09:00:00Z')), [], 'and nothing while it is still further away')
+  const noClock = parseEvents({ items: [trip] });
+  assert.deepEqual(noClock.map((r) => [r.external_id, r.day]), [['trip', '2026-10-12']]);
+  const huge = parseEvents({ items: [{ id: 'long', summary: 'x', start: { date: '2026-10-01' }, end: { date: '2027-10-01' } }] }, Date.parse('2026-10-05T00:00:00Z'));
+  assert.ok(huge.length <= 4 && huge.every((r) => r.day! >= '2026-10-04' && r.day! <= '2026-10-07'), 'a year-long event saves only the days around now');
+  const brokenEnd = parseEvents({ items: [{ id: 'x', summary: 'x', start: { date: '2026-10-13' }, end: { date: '2026-10-01' } }] }, Date.parse('2026-10-13T09:00:00Z'));
+  assert.deepEqual(brokenEnd.map((r) => [r.external_id, r.day]), [['x', '2026-10-13']], 'an end before the start is one day');
+});
+
 // ---------------------------------------------------------------- refreshAgenda against fake Google
 interface World { events: any[]; lists: Array<{ id: string; tasks: any[] }>; calls: string[]; status: Record<string, number>; throws: Record<string, boolean>; body: Record<string, any> }
 const makeWorld = (over: Partial<World> = {}): World => ({ events: [], lists: [{ id: 'L1', tasks: [] }], calls: [], status: {}, throws: {}, body: {}, ...over });

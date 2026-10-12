@@ -48,9 +48,9 @@ test('hasProAccess: while billing is not enforced everybody has everything; only
   assert.equal(hasProAccess(true, row('canceled', 86400_000), NOW), false);
 });
 
-test('the three copies of entitlement.ts are identical (a function can only import its own folder)', () => {
+test('all copies of entitlement.ts are identical (a function can only import its own folder)', () => {
   const here = readFileSync(new URL('./entitlement.ts', import.meta.url), 'utf8');
-  for (const other of ['../gmail-sync/entitlement.ts', '../polar-billing/entitlement.ts']) assert.equal(readFileSync(new URL(other, import.meta.url), 'utf8'), here, other);
+  for (const other of ['../gmail-sync/entitlement.ts', '../polar-billing/entitlement.ts', '../gmail-connect/entitlement.ts']) assert.equal(readFileSync(new URL(other, import.meta.url), 'utf8'), here, other);
 });
 
 // ---------------------------------------------------------------- signature
@@ -170,11 +170,13 @@ test('handler: bad JSON with a good signature is a 400 and leaves no trace', asy
   assert.deepEqual([db.tables.subscriptions.length, db.tables.polar_events.length], [0, 0]);
 });
 
-test('handler: the same message twice (and three at once) is applied once', async () => {
+test('handler: the same message twice (and three at once) leaves one row with the same content; a finished message is recognised as a duplicate', async () => {
   const db = makeWorld();
-  const [a, b, c] = await Promise.all([send(db, subscriptionEvent()), send(db, subscriptionEvent()), send(db, subscriptionEvent())]);
-  assert.deepEqual([a, b, c].map((x) => Boolean(x.body.applied)).sort(), [false, false, true]);
-  assert.equal(db.tables.subscriptions.length, 1);
+  const answers = await Promise.all([send(db, subscriptionEvent()), send(db, subscriptionEvent()), send(db, subscriptionEvent())]);
+  assert.ok(answers.every((x) => x.status === 200));
+  assert.ok(answers.some((x) => x.body.applied === true));
+  assert.equal(db.tables.subscriptions.length, 1, 'idempotent: applying it again changes nothing');
+  assert.equal(subOf(db).status, 'active');
   assert.deepEqual(await send(db, subscriptionEvent()), { status: 200, body: { duplicate: true } });
 });
 
@@ -198,22 +200,25 @@ test('handler: a manual grant (the owner) is never overwritten; events for other
   assert.deepEqual(await send(db, subscriptionEvent({ customer: { id: 'c', external_id: 'not-a-uuid' } }), { id: 'e-stranger' }), { status: 200, body: { ignored: 'no_member' } });
 });
 
-test('handler: a failed save gives the webhook id back and answers 500, so Polar tries again and the payment is not lost', async () => {
-  const db = makeWorld([], { 'subscriptions.upsert': true });
+test('handler: a failed save answers 500 and records nothing, so Polar tries again and the payment is not lost', async () => {
+  const db = makeWorld([], { 'subscriptions.insert': true });
   assert.equal((await send(db, subscriptionEvent())).status, 500);
-  assert.equal(db.tables.polar_events.length, 0, 'the claim was given back');
-  delete db.failing['subscriptions.upsert'];
+  assert.equal(db.tables.polar_events.length, 0, 'an unfinished message is never recorded as done');
+  delete db.failing['subscriptions.insert'];
   assert.deepEqual(await send(db, subscriptionEvent()), { status: 200, body: { applied: true } });
   assert.equal(isPro(subOf(db), NOW), true);
   const broken = makeWorld([], { 'subscriptions.select': true });
   assert.equal((await send(broken, subscriptionEvent())).status, 500);
   assert.equal(broken.tables.polar_events.length, 0);
-  const noClaim = makeWorld([], { 'polar_events.insert': true });
-  assert.equal((await send(noClaim, subscriptionEvent())).status, 500, 'when even the claim fails, Polar is asked to try again');
+  const noRecord = makeWorld([], { 'polar_events.insert': true });
+  assert.equal((await send(noRecord, subscriptionEvent())).status, 200, 'remembering finished messages is best effort: the payment is saved');
+  assert.equal(isPro(subOf(noRecord), NOW), true);
+  const noLookup = makeWorld([], { 'polar_events.select': true });
+  assert.equal((await send(noLookup, subscriptionEvent())).status, 200, 'a failed duplicate lookup only costs a second, harmless run');
 });
 
 test('handler: a deleted member or a subscription that belongs to someone else is acknowledged without saving', async () => {
-  const gone = makeWorld([], { 'subscriptions.upsert': { code: '23503', message: 'fk' } });
+  const gone = makeWorld([], { 'subscriptions.insert': { code: '23503', message: 'fk' } });
   assert.deepEqual(await send(gone, subscriptionEvent()), { status: 200, body: { ignored: 'unknown_member' } });
   const db = makeWorld([{ user_id: U2, source: 'polar', status: 'active', plan: 'pro', polar_subscription_id: 'sub_1', polar_modified_at: null }]);
   assert.deepEqual(await send(db, subscriptionEvent()), { status: 200, body: { ignored: 'subscription_of_another_member' } });
@@ -239,7 +244,7 @@ test('chaos: random order, repeats, forged messages and database failures - the 
     }
     const order = [...stream, ...stream.filter(() => r() < 0.5)].sort(() => r() - 0.5);
     for (const item of order) {
-      db.failing['subscriptions.upsert'] = r() < 0.15;
+      db.failing['subscriptions.insert'] = r() < 0.15; db.failing['subscriptions.update'] = r() < 0.15;
       db.failing['subscriptions.select'] = r() < 0.1;
       db.failing['polar_events.insert'] = r() < 0.1;
       await send(db, item.event, { id: item.id, signWith: item.forged ? 'whsec_' + Buffer.from('attacker-secret-xxxxxxxxxxxxxxxxxxxx').toString('base64') : SECRET });
@@ -252,5 +257,44 @@ test('chaos: random order, repeats, forged messages and database failures - the 
     if (!newest) { assert.equal(db.tables.subscriptions.length, 0, `seed ${seed}: only forged messages`); continue; }
     assert.equal(subOf(db).status, newest.event.data.status, `seed ${seed}: the newest valid message wins`);
     assert.equal(db.tables.subscriptions.length, 1);
+  }
+});
+
+test('handler: a late message about the end of an OLD subscription does not switch off a newer live one', async () => {
+  const db = makeWorld();
+  await send(db, subscriptionEvent({ id: 'sub_new', status: 'active', modified_at: '2026-10-13T10:00:00Z' }), { id: 'e-new' });
+  const late = await send(db, subscriptionEvent({ id: 'sub_old', status: 'canceled', modified_at: '2026-10-13T11:00:00Z' }, 'subscription.revoked'), { id: 'e-old-ended' });
+  assert.deepEqual(late, { status: 200, body: { ignored: 'other_subscription_still_active' } });
+  assert.equal(subOf(db).polar_subscription_id, 'sub_new');
+  assert.equal(isPro(subOf(db), NOW), true);
+  // but a live message about a different subscription (the member bought again after the old one ended) is applied
+  const ended = makeWorld([{ user_id: U1, source: 'polar', status: 'canceled', plan: 'pro', current_period_end: null, polar_subscription_id: 'sub_old', polar_modified_at: '2026-10-01T00:00:00.000Z' }]);
+  assert.equal((await send(ended, subscriptionEvent({ id: 'sub_new', status: 'active', modified_at: '2026-10-13T10:00:00Z' }), { id: 'e-buy-again' })).body.applied, true);
+  assert.equal(subOf(ended).polar_subscription_id, 'sub_new');
+});
+
+test('handler: an oversized body is refused before anything else; a message without modified_at uses the event time', async () => {
+  const db = makeWorld();
+  const big = 'x'.repeat(300 * 1024);
+  const answer = await handleWebhook(db as any, signed(SECRET, JSON.stringify({ type: 'subscription.active', pad: big })), SECRET, NOW);
+  assert.deepEqual(answer, { status: 413, body: { error: 'too_large' } });
+  const parsed = parseSubscriptionEvent({ type: 'subscription.active', timestamp: '2026-10-13T12:00:00Z', data: { id: 's1', status: 'active', customer: { id: 'c', external_id: U1 } } }) as any;
+  assert.equal(parsed.row.polar_modified_at, '2026-10-13T12:00:00.000Z');
+});
+
+test('handler: two messages arriving at the same moment, in either order, leave the NEWER one on top', async () => {
+  const older = subscriptionEvent({ status: 'active', modified_at: '2026-10-13T09:00:00Z' }, 'subscription.active');
+  const newer = subscriptionEvent({ status: 'canceled', modified_at: '2026-10-13T10:00:00Z' }, 'subscription.revoked');
+  for (const order of [[older, newer], [newer, older]]) {
+    const db = makeWorld();
+    await Promise.all(order.map((event, i) => send(db, event, { id: 'race-' + i })));
+    assert.equal(db.tables.subscriptions.length, 1);
+    assert.equal(subOf(db).status, 'canceled', 'the newer message wins whatever the arrival order');
+  }
+  // and when the row already exists
+  for (const order of [[older, newer], [newer, older]]) {
+    const db = makeWorld([{ user_id: U1, source: 'polar', status: 'trialing', plan: 'pro', polar_subscription_id: 'sub_1', polar_modified_at: '2026-10-13T08:00:00.000Z' }]);
+    await Promise.all(order.map((event, i) => send(db, event, { id: 'race2-' + i })));
+    assert.equal(subOf(db).status, 'canceled');
   }
 });

@@ -119,6 +119,8 @@
     could_not_start: 'לא הצלחנו להתחיל את הסריקה. נסה שוב.',
     bad_request: 'הבקשה לא תקינה. רענן את הדף ונסה שוב.',
     not_found: 'הסריקה לא נמצאה.',
+    pro_required: 'הסריקה וההצלבה זמינות במנוי Pro.',
+    access_unknown: 'לא הצלחנו לבדוק את המנוי כרגע. נסה שוב בעוד רגע.',
   };
   function scanErrorMessage(code) {
     return Object.prototype.hasOwnProperty.call(SCAN_ERRORS, code) ? SCAN_ERRORS[code] : GENERIC;
@@ -263,8 +265,8 @@
       const end = row.ends_at ? new Date(row.ends_at).getTime() : NaN;
       if (Number.isFinite(end) ? end <= nowMs : start.getTime() < nowMs - 3600000) continue; // already over
       const day = localDay(start);
-      if (day !== today && day !== tomorrow) continue;
       const running = start.getTime() <= nowMs;
+      if (!(running && Number.isFinite(end)) && day !== today && day !== tomorrow) continue; // an overnight or multi-day event that started before today is still on
       events.push({ row, sort: start.getTime() / 60000, label: running ? `עכשיו · עד ${Number.isFinite(end) ? clock(new Date(end)) : '?'}` : `${dayWord(day)} · ${clock(start)}` });
     }
     events.sort((a, b) => a.sort - b.sort);
@@ -317,6 +319,10 @@
     };
     return texts[code] || 'משהו השתבש. נסה שוב.';
   }
-  const isPayUrl = (value) => typeof value === 'string' && /^https:\/\/[^\s]+$/.test(value) && value.length <= 2083;  return { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, agendaBriefing, deadlineLabel, greeting, localDay, planView, isProRow, billingErrorMessage, isPayUrl };
+  // Only https addresses of polar.sh (checkout.polar.sh, sandbox.polar.sh, polar.sh) are followed.
+  const isPayUrl = (value) => {
+    if (typeof value !== 'string' || value.length > 2083 || !/^https:\/\/[^\s]+$/.test(value)) return false;
+    try { const host = new URL(value).hostname.toLowerCase(); return host === 'polar.sh' || host.endsWith('.polar.sh'); } catch { return false; }
+  };  return { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, agendaBriefing, deadlineLabel, greeting, localDay, planView, isProRow, billingErrorMessage, isPayUrl };
 });
 

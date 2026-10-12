@@ -174,7 +174,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js"></script>
-<script src="logic.js?v=20261013a"></script>
+<script src="logic.js?v=20261013b"></script>
 <script>
   // config.js defines window.APP_CONFIG = { supabaseUrl, supabaseKey } (the publishable key; never a secret key).
   const { supabaseUrl, supabaseKey } = window.APP_CONFIG;
@@ -269,6 +269,7 @@
 
   // The plan card. enforced false = the testers phase: everything is free and no payment buttons are shown.
   function renderPlan(settings, sub) {
+    if (settings === null) { planLocked = false; show($('planCard'), false); return; } // the switch could not be read: say nothing, lock nothing (the server decides)
     const value = (key) => { const found = (Array.isArray(settings) ? settings : []).find((row) => row && row.key === key); return found ? found.value : undefined; };
     const view = logic.planView(value('billing_enforced') === true, sub, new Date(), value('polar_environment'));
     planLocked = view.locked; planChecked = true;
@@ -309,6 +310,8 @@
     window.setTimeout(again, 2000);
   }
   checkBillingReturn();
+  // Coming back with the browser's back button from Polar's page: the buttons work again.
+  window.addEventListener('pageshow', (event) => { if (event.persisted) { $('planUpgrade').disabled = false; $('planManage').disabled = false; $('planStatus').textContent = ''; } });
 
   // The e-mail briefing switch. The member writes only digest_email and digest_tz (the database allows nothing else); the
   // server sends the mail to the member's own Google address between 07:00 and 12:00 in this time zone, only if there is something to show.
@@ -330,6 +333,8 @@
     needs_reconnect: 'החיבור ל-Gmail פג. חבר מחדש ונסה שוב.',
     not_connected: 'Gmail עדיין לא מחובר.',
     no_address: 'לא מצאנו כתובת מייל תקינה לחיבור.',
+    pro_required: 'מייל הבוקר זמין במנוי Pro.',
+    access_unknown: 'לא הצלחנו לבדוק את המנוי כרגע. נסה שוב בעוד רגע.',
   };
   $('digestTest').addEventListener('click', async () => {
     const button = $('digestTest');
@@ -614,7 +619,7 @@
           ? `מחובר: ${connection.google_email || 'Gmail'}${connection.last_checked_at ? ' · נבדק לאחרונה ' + new Date(connection.last_checked_at).toLocaleString('he-IL') : ''}`
           : 'Gmail עדיין לא מחובר.';
       show($('connect'), !connected || expired); show($('check'), connected && !expired); show($('disconnect'), connected);
-      renderPlan(settingsResult.error ? [] : settingsResult.data, subResult.error ? null : subResult.data); // a failed read never locks anything: the server decides
+      renderPlan(settingsResult.error ? null : settingsResult.data || [], subResult.error ? null : subResult.data); // a failed read never locks anything: the server decides
       renderDigestEmail(connected && !expired && !planLocked ? connection : null);
 
       allRows = digestResult.data || [];

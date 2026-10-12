@@ -10,14 +10,14 @@
 
 **Spec:** Polar docs read on 2026-10-13 (checkout sessions, webhooks, subscription events). Owner decisions (chat, 2026-10-13): app = Gmail agent; Free = automatic summaries + daily summary card (+ the briefing card with deadlines and replies); Pro = everything: scan and cross-check, calendar and tasks, e-mail briefing (and its test button); suggested price 5 USD per month (changeable in Polar, not in code).
 
-**Owner decision 2 (2026-10-13, mid-build):** the first stage after launch is the TESTERS phase, so the app is free for everybody at first. A server setting illing_enforced (table pp_settings, default alse) makes every member Pro-equivalent; the owner flips it to 	rue with one SQL line when payments go live. The page shows no payment buttons while it is alse.
+**Owner decision 2 (2026-10-13, mid-build):** the first stage after launch is the TESTERS phase, so the app is free for everybody at first. A server setting `billing_enforced` (table `app_settings`, default `false`) makes every member Pro-equivalent; the owner flips it to `true` with one SQL line when payments go live. The page shows no payment buttons while it is `false`.
 
 ## Global Constraints
 - Server-side enforcement only; the page hides things for comfort, never for security.
 - `subscriptions` is written only by `polar-webhook` (service role) and by the owner through SQL for manual grants (`source = 'manual'`, never overwritten by a webhook).
 - Secrets only as Supabase secrets: `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET`, `POLAR_PRODUCT_ID`, optional `POLAR_SERVER` (`sandbox` default, `production`). None in the repo, none typed by Claude.
 - Webhook: signature verified on the RAW body, timestamp within 5 minutes, idempotent by `webhook-id`, out-of-order safe by `modified_at`, always 200 for valid-but-ignorable events (Polar retries on errors).
-- Access rule: hasPro = !billing_enforced || isPro(subscription).
+- Access rule: `hasPro = !billing_enforced || isPro(subscription)`.
 - Pro rule: `active` or `trialing`; `past_due` for 3 days after the period end; everything else is Free.
 - All UI text Hebrew, plain text only (textContent).
 

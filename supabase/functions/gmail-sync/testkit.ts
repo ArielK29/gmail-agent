@@ -31,7 +31,7 @@ export function makeDb(tables: Record<string, Row[]>, failing: Record<string, an
       let action: Action = 'select';
       let payload: any;
       let options: any;
-      let order: { column: string; ascending: boolean } | null = null;
+      let order: { column: string; ascending: boolean; nullsFirst: boolean } | null = null;
       let limit = Infinity;
       let returning = false;
 
@@ -43,6 +43,7 @@ export function makeDb(tables: Record<string, Row[]>, failing: Record<string, an
           return (row: Row) => {
             if (op === 'is') return value === 'null' ? row[column] == null : row[column] === value;
             if (op === 'lt') return row[column] != null && compare(row[column], value) < 0;
+            if (op === 'lte') return row[column] != null && compare(row[column], value) <= 0;
             if (op === 'eq') return String(row[column]) === value;
             throw new Error('fake db: unsupported or() clause ' + part);
           };
@@ -79,7 +80,8 @@ export function makeDb(tables: Record<string, Row[]>, failing: Record<string, an
             }
           }
         }
-        if (order) selected = [...selected].sort((a, b) => (order!.ascending ? 1 : -1) * compare(a[order!.column], b[order!.column]));
+        // Like Postgres: nulls come last unless nullsFirst is asked for.
+        if (order) selected = [...selected].sort((a, b) => { const x = a[order!.column]; const y = b[order!.column]; if (x == null || y == null) return x == null && y == null ? 0 : (x == null) === order!.nullsFirst ? -1 : 1; return (order!.ascending ? 1 : -1) * compare(x, y); });
         selected = selected.slice(0, limit).map((row) => JSON.parse(JSON.stringify(row)));
         return { data: action === 'select' || returning ? selected : null, error: null };
       };
@@ -98,7 +100,7 @@ export function makeDb(tables: Record<string, Row[]>, failing: Record<string, an
         gte: (column: string, value: any) => (filters.push((row) => row[column] != null && compare(row[column], value) >= 0), builder),
         is: (column: string, value: any) => (filters.push((row) => (value === null ? row[column] == null : row[column] === value)), builder),
         or: (text: string) => (filters.push(orClause(text)), builder),
-        order: (column: string, opts?: { ascending?: boolean }) => ((order = { column, ascending: opts?.ascending !== false }), builder),
+        order: (column: string, opts?: { ascending?: boolean; nullsFirst?: boolean }) => ((order = { column, ascending: opts?.ascending !== false, nullsFirst: opts?.nullsFirst === true }), builder),
         limit: (n: number) => ((limit = n), builder),
         maybeSingle: () => {
           const result: any = run();

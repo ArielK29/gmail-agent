@@ -502,5 +502,19 @@ test('payment messages and addresses: every server reason has Hebrew text; only 
   for (const code of ['not_configured', 'already_subscribed', 'checkout_failed', 'portal_failed', 'no_subscription']) assert.ok(/[\u0590-\u05FF]/.test(billingErrorMessage(code)), code);
   assert.ok(/[\u0590-\u05FF]/.test(billingErrorMessage('something_new')));
   assert.equal(isPayUrl('https://sandbox.polar.sh/checkout/abc'), true);
-  for (const bad of ['http://x.example', 'javascript:alert(1)', 'data:text/html,x', '//evil.example', 'https://a b.example', '', null, undefined, 5, 'https://' + 'x'.repeat(2100)]) assert.equal(isPayUrl(bad), false, String(bad).slice(0, 40));
+  assert.equal(isPayUrl('https://polar.sh/org/portal?customer_session_token=abc'), true);
+  assert.equal(isPayUrl('https://checkout.polar.sh/x'), true);
+  for (const bad of ['http://x.example', 'javascript:alert(1)', 'data:text/html,x', '//evil.example', 'https://a b.example', '', null, undefined, 5, 'https://' + 'x'.repeat(2100), 'https://evil.example/polar.sh', 'https://polar.sh.evil.example/x', 'https://notpolar.sh/x', 'https://polar.sh@evil.example/x']) assert.equal(isPayUrl(bad), false, String(bad).slice(0, 40));
+});
+
+test('scan messages: the Pro-required and undecidable-access reasons have their own Hebrew text', () => {
+  const generic = scanErrorMessage('something_unknown');
+  for (const code of ['pro_required', 'access_unknown']) { assert.notEqual(scanErrorMessage(code), generic, code); assert.ok(/[\u0590-\u05FF]/.test(scanErrorMessage(code))); }
+});
+
+test('agendaBriefing: an event that started yesterday evening and is still running at 00:30 is shown as "now"; one that ended is not', () => {
+  const now = L(13, 0, 30);
+  const b = agendaBriefing([ev('night', L(12, 22), L(13, 2)), ev('over', L(12, 21), L(13, 0, 10)), ev('days', L(11, 9), L(14, 18))], now, '2026-10-13');
+  assert.deepEqual(b.events.map((e) => e.row.external_id).sort(), ['days', 'night']);
+  assert.ok(b.events.every((e) => e.label.startsWith('עכשיו')));
 });

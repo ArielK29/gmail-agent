@@ -13,7 +13,16 @@ export const polarBase = (server: string | undefined): string => (server === 'pr
 const configured = (env: BillingEnv): boolean => Boolean(env.token && env.productId && env.appUrl && /^https:\/\//.test(env.appUrl));
 const withParam = (url: string, param: string): string => `${url}${url.includes('?') ? '&' : '?'}${param}`;
 const validEmail = (value: unknown): value is string => typeof value === 'string' && value.length <= 254 && /^[^\s@,;<>()"']+@[^\s@,;<>()"']+\.[^\s@,;<>()"']+$/.test(value);
-const httpsUrl = (value: unknown): value is string => typeof value === 'string' && value.length <= 2083 && /^https:\/\/[^\s]+$/.test(value);
+// Only https addresses of polar.sh (checkout.polar.sh, sandbox.polar.sh, polar.sh) are handed to the page.
+const httpsUrl = (value: unknown): value is string => {
+  if (typeof value !== 'string' || value.length > 2083 || !/^https:\/\/[^\s]+$/.test(value)) return false;
+  try {
+    const host = new URL(value).hostname.toLowerCase();
+    return host === 'polar.sh' || host.endsWith('.polar.sh');
+  } catch {
+    return false;
+  }
+};
 
 async function callPolar(env: BillingEnv, path: string, body: unknown, fetchFn: Fetch): Promise<{ ok: boolean; data: any }> {
   try {
@@ -33,7 +42,9 @@ export async function createCheckout(admin: SupabaseClient, user: { id: string; 
   if (!configured(env)) return { status: 503, body: { error: 'not_configured' } };
   const { data: current, error } = await admin.from('subscriptions').select('status, current_period_end').eq('user_id', user.id).maybeSingle();
   if (error) return { status: 500, body: { error: 'read_failed' } };
-  if (isPro(current, nowMs) && current?.status === 'active') return { status: 409, body: { error: 'already_subscribed' } };
+  // Anyone who still has a live subscription (also trialing, or past_due while the card is being retried) must not buy a second one;
+  // they manage the existing one in the portal.
+  if (isPro(current, nowMs)) return { status: 409, body: { error: 'already_subscribed' } };
   const result = await callPolar(
     env,
     '/checkouts/',

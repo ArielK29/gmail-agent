@@ -72,7 +72,7 @@ test('checkout: a member who already pays gets "already subscribed" (no second s
 });
 
 test('checkout: Polar refusing, being unreachable, or answering with something odd gives a clear failure and never a made-up address', async () => {
-  for (const reply of [{ status: 422, json: { detail: 'bad' } }, { status: 500 }, { throws: true }, { status: 201, json: {} }, { status: 201, json: { url: 'http://insecure.example/' } }, { status: 201, json: { url: 'javascript:alert(1)' } }, { status: 201, json: { url: 5 } }]) {
+  for (const reply of [{ status: 422, json: { detail: 'bad' } }, { status: 500 }, { throws: true }, { status: 201, json: {} }, { status: 201, json: { url: 'http://insecure.example/' } }, { status: 201, json: { url: 'javascript:alert(1)' } }, { status: 201, json: { url: 5 } }, { status: 201, json: { url: 'https://evil.example/polar.sh' } }, { status: 201, json: { url: 'https://polar.sh.evil.example/checkout' } }, { status: 201, json: { url: 'https://notpolar.sh/checkout' } }]) {
     const polar = fakePolar(reply as any);
     assert.deepEqual(await createCheckout(world() as any, user, 'pro', ENV, NOW, polar.fn), { status: 502, body: { error: 'checkout_failed' } }, JSON.stringify(reply));
   }
@@ -92,5 +92,13 @@ test('portal: opens the portal of the member\'s own Polar customer; refuses memb
   assert.deepEqual(await createPortal(world([{ user_id: U, source: 'manual', polar_customer_id: 'cus_left_over', status: 'active' }]) as any, user, ENV, p2.fn), { status: 409, body: { error: 'no_subscription' } });
   assert.equal(p2.calls.length, 0);
   assert.deepEqual(await createPortal(db as any, user, {}, p2.fn), { status: 503, body: { error: 'not_configured' } });
-  for (const reply of [{ status: 500 }, { throws: true }, { status: 201, json: {} }, { status: 201, json: { customer_portal_url: 'http://x.example' } }]) assert.deepEqual(await createPortal(db as any, user, ENV, fakePolar(reply as any).fn), { status: 502, body: { error: 'portal_failed' } });
+  for (const reply of [{ status: 500 }, { throws: true }, { status: 201, json: {} }, { status: 201, json: { customer_portal_url: 'http://x.example' } }, { status: 201, json: { customer_portal_url: 'https://evil.example/portal' } }]) assert.deepEqual(await createPortal(db as any, user, ENV, fakePolar(reply as any).fn), { status: 502, body: { error: 'portal_failed' } });
+});
+
+test('checkout: a trialing member or one whose payment is being retried (past_due) also cannot buy a second subscription', async () => {
+  for (const sub of [{ status: 'trialing', current_period_end: new Date(NOW + 5 * 86400_000).toISOString() }, { status: 'past_due', current_period_end: new Date(NOW - 86400_000).toISOString() }, { status: 'active', current_period_end: null }]) {
+    const polar = fakePolar();
+    assert.deepEqual(await createCheckout(world([{ user_id: U, ...sub }]) as any, user, 'pro', ENV, NOW, polar.fn), { status: 409, body: { error: 'already_subscribed' } }, JSON.stringify(sub));
+    assert.equal(polar.calls.length, 0);
+  }
 });

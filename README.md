@@ -5,6 +5,7 @@
 ## החלטות ארכיטקטורה
 | נושא | החלטה |
 |---|---|
+| מנויים (Polar) | ראה `docs/BILLING.md`: חינמי/Pro, מתג `billing_enforced` (כבוי בשלב הטסטרים), סודות, ופתרון תקלות |
 | חיבור ל-Gmail | OAuth נפרד מההתחברות, הרשאה `gmail.readonly` (חובה) + `calendar.readonly` ו-`tasks.readonly` (רשות, קריאה בלבד), `access_type=offline` (refresh token) |
 | איפה נשמר ה-token | טבלה בשרת (`gmail_connections`). הדפדפן לא יכול לקרוא אותו, רק פונקציות השרת |
 | זיהוי מיילים חדשים | `history.list` של Gmail מאז המיקום ששמרנו. בדיקה תקופתית (כל 10 דקות, pg_cron) + כפתור "בדוק עכשיו" |

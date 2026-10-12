@@ -143,6 +143,10 @@ async function work(admin: SupabaseClient, scan: ScanRow, nowMs: number): Promis
   const { data: connection } = await admin.from('gmail_connections').select('refresh_token, status').eq('user_id', scan.user_id).maybeSingle();
   if (!connection) return fail(admin, scan, 'not_connected');
   if (connection.status === 'needs_reconnect') return fail(admin, scan, 'needs_reconnect');
+  // A scan that is already running stops when the member is no longer Pro (a lapsed subscription); an undecidable access is a temporary error.
+  const pro = await memberHasPro(admin, scan.user_id, nowMs);
+  if (pro === null) throw new Error('access_unknown');
+  if (!pro) return fail(admin, scan, 'pro_required');
   const access = await getAccessToken(connection.refresh_token);
   if ('revoked' in access) {
     await admin.from('gmail_connections').update({ status: 'needs_reconnect' }).eq('user_id', scan.user_id);

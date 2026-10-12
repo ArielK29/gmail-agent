@@ -307,7 +307,8 @@ const isoOrNull = (value: unknown): string | null => {
 
 // Events of the primary calendar (Google answer of events.list). Cancelled events, events the member declined, and the
 // "where I work" markers are not part of the day. Titles are untrusted text: links and control characters removed, cut.
-export function parseEvents(body: unknown): AgendaRow[] {
+const MAX_ALL_DAY_SPAN = 14; // days of one all-day event that are saved
+export function parseEvents(body: unknown, nowMs?: number): AgendaRow[] {
   const items: unknown[] = Array.isArray((body as any)?.items) ? (body as any).items : [];
   const seen = new Set<string>();
   const rows: AgendaRow[] = [];
@@ -318,8 +319,21 @@ export function parseEvents(body: unknown): AgendaRow[] {
     if (attendees.some((a) => a && a.self === true && a.responseStatus === 'declined')) continue;
     const title = cleanText(item.summary, 200) || NO_TITLE;
     let row: AgendaRow | null = null;
+    let extra: AgendaRow[] = [];
     if (typeof item.start?.date === 'string' && isRealDay(item.start.date)) {
-      row = { kind: 'event', external_id: item.id, title, starts_at: null, ends_at: null, all_day: true, day: item.start.date };
+      // An all-day event can last several days (a trip from Monday to Wednesday): Google gives the first day and the day AFTER the last.
+      // With a clock it is saved once for every day that matters now (yesterday to the day after tomorrow), so it is still there on Tuesday.
+      const first: string = item.start.date;
+      const after: string = isRealDay(item.end?.date) && item.end.date > first ? item.end.date : addDays(first, 1);
+      const days: string[] = [];
+      for (let day = first; day < after && days.length < MAX_ALL_DAY_SPAN; day = addDays(day, 1)) days.push(day);
+      const today = typeof nowMs === 'number' && Number.isFinite(nowMs) ? utcDay(new Date(nowMs)) : null;
+      const wanted = today === null ? days.slice(0, 1) : days.filter((day) => day >= addDays(today, -1) && day <= addDays(today, 2));
+      if (wanted.length === 0) continue;
+      const idOf = (day: string) => (days.length === 1 || (today === null && day === first) ? item.id : `${item.id}:${day}`);
+      if (!wanted.every((day) => idOf(day).length <= 256)) continue;
+      row = { kind: 'event', external_id: idOf(wanted[0]), title, starts_at: null, ends_at: null, all_day: true, day: wanted[0] };
+      extra = wanted.slice(1).map((day) => ({ kind: 'event' as const, external_id: idOf(day), title, starts_at: null, ends_at: null, all_day: true, day }));
     } else {
       const start = isoOrNull(item.start?.dateTime);
       if (start) {
@@ -329,7 +343,7 @@ export function parseEvents(body: unknown): AgendaRow[] {
     }
     if (!row) continue;
     seen.add(item.id);
-    rows.push(row);
+    rows.push(row, ...extra);
     if (rows.length >= MAX_EVENTS) break;
   }
   return rows;

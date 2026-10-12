@@ -2,6 +2,8 @@
 // Separate from sign-in on purpose: only READ-ONLY scopes are requested (Gmail required; calendar and tasks optional, the member
 // can untick them on Google's screen), with offline access (a refresh token) so the agent can work in the background.
 import { createClient } from 'npm:@supabase/supabase-js@2';
+import { memberHasPro } from './access.ts';
+import { scopeFor } from './scopes.ts';
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -34,7 +36,7 @@ Deno.serve(async (req: Request) => {
     client_id: clientId,
     redirect_uri: `${url}/functions/v1/gmail-callback`,
     response_type: 'code',
-    scope: 'https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/tasks.readonly openid email',
+    scope: scopeFor(await memberHasPro(admin, data.user.id, Date.now())), // undecidable access: Gmail only
     access_type: 'offline',
     prompt: 'consent',
     state,
