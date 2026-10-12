@@ -8,7 +8,7 @@
 
 **Tech Stack:** Supabase Edge Functions (Deno), Postgres + RLS, Polar REST API (`/v1/checkouts/`, `/v1/customer-sessions/`), Standard Webhooks signatures (HMAC-SHA256), plain JS page.
 
-**Spec:** Polar docs read on 2026-10-13 (checkout sessions, webhooks, subscription events). Owner decisions (chat, 2026-10-13): app = Gmail agent; Free = automatic summaries + daily summary card (+ the briefing card with deadlines and replies); Pro = everything: scan and cross-check, calendar and tasks, e-mail briefing (and its test button); suggested price 5 USD per month (changeable in Polar, not in code).
+**Spec:** Polar docs read on 2026-10-13 (checkout sessions, webhooks, subscription events). Owner decisions (chat, 2026-10-13): app = Gmail agent; Free = automatic summaries + daily summary card (+ the briefing card with deadlines and replies); Pro = everything: scan and cross-check, calendar and tasks, e-mail briefing (and its test button); price: 19 ILS per month, decided by the owner on 2026-10-12 (first suggested as 5 USD; the price lives in Polar, not in code).
 
 **Owner decision 2 (2026-10-13, mid-build):** the first stage after launch is the TESTERS phase, so the app is free for everybody at first. A server setting `billing_enforced` (table `app_settings`, default `false`) makes every member Pro-equivalent; the owner flips it to `true` with one SQL line when payments go live. The page shows no payment buttons while it is `false`.
 
