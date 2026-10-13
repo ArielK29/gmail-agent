@@ -27,12 +27,22 @@ interface Outcome { outcome: 'applied' | 'ignored'; reason?: string; user_id?: s
 const EVENT_KEEP_MS = 30 * 24 * 3600 * 1000;
 export const MAX_BODY_BYTES = 256 * 1024; // a real subscription message is a few kilobytes; nothing bigger is even read
 
+// Length and character classes of a secret, never a character of it.
+function describeSecret(value: string): string {
+  const odd = [...value].filter((c) => c.charCodeAt(0) < 33 || c.charCodeAt(0) > 126).length;
+  return `length ${value.length}, ${odd} unusual characters, starts like whsec_: ${value.startsWith('whsec_')}`;
+}
+
 export async function handleWebhook(admin: SupabaseClient, request: WebhookRequest, rawSecret: string | undefined, nowMs = Date.now(), config: WebhookConfig = {}): Promise<WebhookAnswer> {
   const secret = rawSecret?.trim(); // a secret pasted into a dashboard may carry a trailing newline or space, which would make every signature fail
   const productId = config?.productId?.trim();
   if (!secret || !productId) return { status: 503, body: { error: 'not_configured' } };
   if (request.rawBody.length > MAX_BODY_BYTES) return { status: 413, body: { error: 'too_large' } };
-  if (!(await verifySignature(secret, request.headers, request.rawBody, nowMs))) return { status: 403, body: { error: 'invalid_signature' } };
+  if (!(await verifySignature(secret, request.headers, request.rawBody, nowMs))) {
+    // Forged, replayed or signed with another secret. The SHAPE of our secret is logged (never a character of it), to tell a wrongly pasted secret from a forged message.
+    console.error(`polar webhook: signature refused (our secret: ${describeSecret(secret)})`);
+    return { status: 403, body: { error: 'invalid_signature' } };
+  }
   let payload: any;
   try {
     payload = JSON.parse(request.rawBody);

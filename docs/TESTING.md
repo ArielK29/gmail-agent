@@ -328,3 +328,25 @@ Deployed: polar-webhook v7, polar-billing v11, migration 019, page (logic.js?v=2
 | LIVE check on a throw-away member with a fake Polar customer id | no session -> 401; no confirm -> 400 and nothing deleted; confirm -> 200 `{ok:true, revoked:false}` (the fake Google token cannot be revoked, as expected); all of the member's rows and the member were gone, the owner's account untouched (1 user, manual Pro, his connection and summaries intact). Polar answered the fake customer with "not found", which also proves the token has the scope and the path is right |
 | Whole suite | 264 pass, 0 fail |
 | Not verified | deleting a REAL sandbox customer with an active subscription (needs the payment window #25): that Polar ends the subscription and anonymizes |
+## First real sandbox payment, end to end (issue #25, 2026-10-13, owner's own account)
+
+Done with the owner's account in the Polar sandbox; the window was closed afterwards (`billing_enforced=false`, manual Pro grant restored, no Polar rows left).
+
+| Step | Result |
+|---|---|
+| Checkout and payment (sandbox test card) | worked, subscription Active in Polar |
+| Webhook delivery | first refused with 403 for every message: the stored `POLAR_WEBHOOK_SECRET` was not the Polar secret (log: length 37, not starting `whsec_`; later length 20 = the secret NAME was pasted). After a correct paste: `applied` |
+| `polar_events` / `subscriptions` | rows with outcome `applied`; plan pro, active, period end +1 month, `polar_server=sandbox` |
+| Page | "מנוי Pro פעיל", renewal date shown |
+| Customer portal (button "ניהול המנוי") | opens, shows 19 ILS / month and the paid invoice |
+| Cancel in the portal | `cancel_at_period_end=true`; page: "המנוי בוטל וימשיך לעבוד עד ..." |
+| Uncancel in the portal | back to `cancel_at_period_end=false` |
+| A message sent again after newer ones | ignored as `older_than_stored` (order protection works with real Polar messages) |
+
+Real payload shape: the product id check (`product_id` / `product.id`) matched, so there was no `no_product` outcome.
+
+Not tested: `past_due` (needs a failing card), refund, deleting a customer that has an active subscription (#25 step 13). They stay on the deferred list.
+
+Lessons:
+- A secret must be copied from a normal browser, never through the in-app pane (its clipboard does not receive what the page copies, so the OLD clipboard text gets pasted). The new log line "our secret: length N, ..." tells in one look which case it is: 50 and `starts like whsec_: true` is correct.
+- The webhook secret appeared in screenshots: reset it in Polar and paste the new one into Supabase (sandbox only, low risk).

@@ -408,3 +408,22 @@ test('handler: nothing the handler prints can contain the secret, the product id
   const printed = lines.join('\n');
   for (const forbidden of [SECRET, 'leak-me@example.com', 'Leak Me', 'prod_stranger_xyz', 'cus_1']) assert.ok(!printed.includes(forbidden), `printed: ${forbidden}`);
 });
+
+// ---------------------------------------------------------------- the log line that tells a wrongly pasted secret from a wrong signature
+test('handler: a refused signature logs the SHAPE of our secret (length, whsec_ start, unusual characters) so a wrongly pasted secret can be told from a forged message; the secret itself is never printed', async () => {
+  const lines: string[] = []; const keep = console.error; console.error = (...a: unknown[]) => { lines.push(a.map(String).join(' ')); };
+  try {
+    const good = await send(makeWorld(), subscriptionEvent(), { id: 'evt_ok' });
+    assert.equal(good.status, 200);
+    assert.deepEqual(lines, [], 'a good message logs nothing');
+    const wrong = ['whsec_', 'מקור מקוון הודעה ישנה שהועתקה בטעות '.repeat(2)].join('');
+    const refused = await send(makeWorld(), subscriptionEvent(), { id: 'evt_bad', secret: wrong, signWith: SECRET });
+    assert.equal(refused.status, 403);
+  } finally { console.error = keep; }
+  const text = lines.join('\n');
+  assert.match(text, /signature refused/);
+  assert.match(text, /starts like whsec_: true/);
+  assert.match(text, /\d+ unusual characters/);
+  assert.ok(!text.includes('מקור מקוון'), 'no character of the secret is printed');
+  assert.ok(!text.includes(SECRET));
+});
