@@ -319,3 +319,12 @@ Order followed (test-driven): 1) 16 new tests written first and seen FAILING for
 | Whole suite | 251 pass, 0 fail |
 | Cleanup | `billing_enforced=false`, throw-away member deleted (1 user, 1 connection, 1 subscription = the owner's manual grant), dev server stopped |
 Deployed: polar-webhook v7, polar-billing v11, migration 019, page (logic.js?v=20261013c). **NOT yet deployed (no behaviour change while `POLAR_SERVER=sandbox`; deploy before production):** gmail-sync and gmail-connect (new `access.ts` and `entitlement.ts`). Not verified: Polar's real subscription payload (product id field names) - checked in the sandbox payment window (#25); if the allowlist ignores a real payment the outcome log shows `no_product` or `other_product`.
+## Delete my account, issue #26 (2026-10-13): tests first, then code
+| What | Result |
+|---|---|
+| New Edge Function `delete-account` (v1): order = 1) read the subscription row, 2) delete the Polar customer FIRST (`DELETE /v1/customers/{id}?anonymize=true`, scope `customers:write`; Polar then also ends the subscription), 3) Gmail data + subscription row, 4) Google token, 5) the member | 11 tests written first and seen FAILING (stub), then green; 8 deliberate breakages, all caught |
+| Failure rules | Polar refuses/unreachable -> 502 and NOTHING deleted; no token but a Polar customer -> 503; failed read -> 500; a failed delete stops before the member is deleted; every step can be retried (Polar 404 = already gone); the owner's manual grant never touches Polar; the customer id is URL-encoded; the token is never printed |
+| Page: button "מחק את החשבון שלי" with a confirm text (mentions the subscription for payers), Hebrew error texts, signs out after success; privacy page and terms updated | 2 new tests (53 page tests); page `logic.js?v=20261013d` |
+| LIVE check on a throw-away member with a fake Polar customer id | no session -> 401; no confirm -> 400 and nothing deleted; confirm -> 200 `{ok:true, revoked:false}` (the fake Google token cannot be revoked, as expected); all of the member's rows and the member were gone, the owner's account untouched (1 user, manual Pro, his connection and summaries intact). Polar answered the fake customer with "not found", which also proves the token has the scope and the path is right |
+| Whole suite | 264 pass, 0 fail |
+| Not verified | deleting a REAL sandbox customer with an active subscription (needs the payment window #25): that Polar ends the subscription and anonymizes |

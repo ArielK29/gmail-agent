@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, agendaBriefing, deadlineLabel, greeting, localDay, planView, isProRow, billingErrorMessage, isPayUrl, priceText } = require('./logic.js');
+const { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, agendaBriefing, deadlineLabel, greeting, localDay, planView, isProRow, billingErrorMessage, isPayUrl, priceText, deleteAccountMessage, deleteAccountConfirmText } = require('./logic.js');
 
 test('authMessage maps the Supabase errors seen in the browser run', () => {
   assert.equal(authMessage({ message: 'Invalid login credentials' }), 'האימייל או הסיסמה שגויים.');
@@ -549,4 +549,26 @@ test('planView: when the server could not tell the environment or the price, Fre
   assert.deepEqual([pro.mode, pro.canManage, pro.sandbox, pro.unavailable], ['pro', true, false, false], 'a paying member can always reach the portal, and nothing false is claimed about the environment');
   const beta = planView(false, null, PNOW, null);
   assert.deepEqual([beta.mode, beta.canUpgrade, beta.unavailable, beta.priceLine], ['beta', false, false, '']);
+});
+
+// ---- issue #26: delete my account ----
+test('deleteAccountConfirmText: the member is told what is lost, that it cannot be undone, and (when paying) that the subscription ends', () => {
+  const plain = deleteAccountConfirmText(false);
+  assert.ok(plain.includes('מחק') && plain.includes('אי אפשר לשחזר'), plain);
+  const paying = deleteAccountConfirmText(true);
+  assert.ok(paying.includes('מנוי') && paying.includes('אי אפשר לשחזר'), paying);
+  assert.notEqual(plain, paying);
+  for (const odd of [undefined, null, 'x', 5]) assert.equal(typeof deleteAccountConfirmText(odd), 'string');
+});
+
+test('deleteAccountMessage: every server answer has a Hebrew text; a failed Polar step says the account was NOT deleted', () => {
+  const polar = deleteAccountMessage('customer_delete_failed');
+  assert.ok(polar.includes('לא נמחק') && polar.includes('מנוי'), polar);
+  assert.ok(deleteAccountMessage('delete_failed').includes('נסה שוב'));
+  assert.ok(deleteAccountMessage('read_failed').includes('נסה שוב'));
+  assert.ok(deleteAccountMessage('not_configured').includes('לא זמינה'));
+  for (const code of ['', undefined, null, 'unexpected', 'Invalid JWT', 5, {}]) {
+    const text = deleteAccountMessage(code);
+    assert.ok(/[א-ת]/.test(text) && !/[A-Za-z]/.test(text), String(code) + ' -> ' + text);
+  }
 });

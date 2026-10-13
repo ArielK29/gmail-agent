@@ -333,10 +333,24 @@
     };
     return texts[code] || 'משהו השתבש. נסה שוב.';
   }
-  // Only https addresses of polar.sh (checkout.polar.sh, sandbox.polar.sh, polar.sh) are followed.
+  // ---- Delete my account (issue #26). Texts only; the server does the work. ----
+  function deleteAccountConfirmText(paying) {
+    return paying === true
+      ? 'למחוק את החשבון שלך? המנוי שלך יבוטל ב-Polar, וכל הסיכומים, החיבור ל-Gmail והנתונים שלך יימחקו. אי אפשר לשחזר.'
+      : 'למחוק את החשבון שלך? כל הסיכומים, החיבור ל-Gmail והנתונים שלך יימחקו. אי אפשר לשחזר.';
+  }
+  function deleteAccountMessage(code) {
+    const texts = {
+      customer_delete_failed: 'לא הצלחנו לבטל את המנוי שלך ב-Polar, ולכן החשבון לא נמחק. נסה שוב בעוד רגע.',
+      delete_failed: 'משהו השתבש במחיקה. נסה שוב.',
+      read_failed: 'משהו השתבש במחיקה. נסה שוב.',
+      not_configured: 'מחיקת חשבון עם מנוי לא זמינה כרגע.',
+    };
+    return typeof code === 'string' && texts[code] ? texts[code] : 'משהו השתבש. נסה שוב.';
+  }  // Only https addresses of polar.sh (checkout.polar.sh, sandbox.polar.sh, polar.sh) are followed.
   const isPayUrl = (value) => {
     if (typeof value !== 'string' || value.length > 2083 || !/^https:\/\/[^\s]+$/.test(value)) return false;
     try { const host = new URL(value).hostname.toLowerCase(); return host === 'polar.sh' || host.endsWith('.polar.sh'); } catch { return false; }
-  };  return { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, agendaBriefing, deadlineLabel, greeting, localDay, planView, isProRow, billingErrorMessage, isPayUrl, priceText };
+  };  return { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, agendaBriefing, deadlineLabel, greeting, localDay, planView, isProRow, billingErrorMessage, isPayUrl, priceText, deleteAccountMessage, deleteAccountConfirmText };
 });
 

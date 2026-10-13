@@ -94,6 +94,7 @@
       <button id="check" class="secondary hidden">בדוק מיילים חדשים עכשיו</button>
       <button id="disconnect" class="secondary hidden">נתק את Gmail ומחק את הנתונים שלי</button>
       <button id="signOut" class="secondary">התנתקות</button>
+      <button id="deleteAccount" class="secondary">מחק את החשבון שלי</button>
     </div>
   </section>
 
@@ -175,12 +176,12 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js"></script>
-<script src="logic.js?v=20261013c"></script>
+<script src="logic.js?v=20261013d"></script>
 <script>
   // config.js defines window.APP_CONFIG = { supabaseUrl, supabaseKey } (the publishable key; never a secret key).
   const { supabaseUrl, supabaseKey } = window.APP_CONFIG;
   const logic = window.AgentLogic; // Hebrew messages and validation, tested in Node (docs/logic.test.js)
-  const LOGIC_FUNCTIONS = ['authMessage', 'validateCredentials', 'problemMessage', 'emptyStateText', 'dailySummary', 'summaryHeadline', 'urgentHeadline', 'safeText', 'morningBriefing', 'greeting', 'localDay', 'scanErrorMessage', 'parseItemsText', 'validateScanForm', 'scanProgressText', 'rollupItems', 'lastFullMonth', 'agendaBriefing', 'planView', 'isPayUrl', 'billingErrorMessage'];
+  const LOGIC_FUNCTIONS = ['authMessage', 'validateCredentials', 'problemMessage', 'emptyStateText', 'dailySummary', 'summaryHeadline', 'urgentHeadline', 'safeText', 'morningBriefing', 'greeting', 'localDay', 'scanErrorMessage', 'parseItemsText', 'validateScanForm', 'scanProgressText', 'rollupItems', 'lastFullMonth', 'agendaBriefing', 'planView', 'isPayUrl', 'billingErrorMessage', 'deleteAccountMessage', 'deleteAccountConfirmText'];
   if (!logic || LOGIC_FUNCTIONS.some((name) => typeof logic[name] !== 'function')) {
     // An old cached copy of logic.js: ask for a fresh page once instead of showing a broken one.
     let already = false; try { already = Boolean(sessionStorage.getItem('logicReload')); sessionStorage.setItem('logicReload', '1'); } catch { already = true; }
@@ -208,6 +209,7 @@
 
   // All text from emails is put on the page with textContent (never as HTML).
   let allRows = [];
+  let memberSub = null; // the member's own subscription row, as last read (to tell the delete dialog whether a subscription ends)
   let planChecked = false; // the plan has been read at least once in this page load
   let planLocked = false; // billing is enforced and this member is not Pro: Pro-only parts are hidden (the server refuses them anyway)
   let allAgenda = []; // the member's calendar events and tasks (gmail_agenda)
@@ -631,6 +633,7 @@
       const enforcedNow = !settingsResult.error && (settingsResult.data || []).some((row) => row && row.key === 'billing_enforced' && row.value === true);
       const billing = enforcedNow ? await loadBillingInfo() : null; // which Polar environment this is and what Pro costs, from the server (only needed once billing is on)
       if (mine !== refreshSeq) return;
+      memberSub = subResult.error ? null : subResult.data;
       renderPlan(settingsResult.error ? null : settingsResult.data || [], subResult.error ? null : subResult.data, billing); // a failed read never locks anything: the server decides
       renderDigestEmail(connected && !expired && !planLocked ? connection : null);
 
@@ -689,6 +692,19 @@
     if (error) $('loginStatus').textContent = logic.authMessage(error);
   };
   $('signOut').onclick = async () => { await db.auth.signOut(); notify(''); refresh(); };
+  // Delete the whole account: the server deletes the Polar customer first (the subscription ends), then the data, then the member.
+  $('deleteAccount').onclick = async () => {
+    const paying = Boolean(memberSub && memberSub.source === 'polar' && logic.isProRow(memberSub, Date.now()));
+    if (!confirm(logic.deleteAccountConfirmText(paying))) return;
+    $('deleteAccount').disabled = true; notify('מוחק את החשבון...');
+    try {
+      const { error } = await db.functions.invoke('delete-account', { body: { confirm: true } });
+      if (error) { let code = ''; try { code = (await error.context.json()).error || ''; } catch { code = ''; } throw new Error(code || 'unknown'); }
+      await db.auth.signOut(); await refresh();
+      notify('החשבון נמחק. תודה שהשתמשת בסוכן.');
+    } catch (e) { notify(logic.deleteAccountMessage(e && e.message)); }
+    $('deleteAccount').disabled = false;
+  };
 
   $('connect').onclick = async () => {
     notify('פותח את Google...');
