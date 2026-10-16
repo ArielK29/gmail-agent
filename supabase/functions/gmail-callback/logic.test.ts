@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { consentOutcome, backUrl, GMAIL_READONLY, GOOGLE_CALENDAR, GOOGLE_TASKS, optionalScopes } from './logic.ts';
+import { consentOutcome, backUrl, backUrlFor, GMAIL_READONLY, GOOGLE_CALENDAR, GOOGLE_TASKS, optionalScopes } from './logic.ts';
 
 test('consentOutcome: stores a connection only when Google sent a refresh token AND the Gmail permission was granted', () => {
   assert.equal(consentOutcome(true, { refresh_token: 'r', scope: `openid email ${GMAIL_READONLY}` }), 'ok');
@@ -34,4 +34,24 @@ test('optional permissions: only the exact calendar and tasks scopes count, what
   assert.deepEqual(optionalScopes({ scope: GOOGLE_CALENDAR + 'x ' + 'https://www.googleapis.com/auth/calendar' }), { calendar: false, tasks: false }, 'look-alike and wider scopes are not the permission');
   assert.deepEqual(optionalScopes({ scope: 'https://www.googleapis.com/auth/tasks' }), { calendar: false, tasks: false }, 'the read-write tasks scope is a different permission');
   for (const bad of [null, undefined, {}, 'x', 5, [], { scope: 5 }, { scope: null }]) assert.deepEqual(optionalScopes(bad), { calendar: false, tasks: false });
+});
+// Issue 32: the app can ask to come back to a deep link instead of the web page. The address comes from the server's own setting,
+// never from the request, and only a custom app scheme counts.
+test('backUrlFor: the web page is the default and the way back for anything unknown', () => {
+  const web = 'https://example.github.io/gmail-agent/';
+  assert.equal(backUrlFor('web', web, 'gmailagent://connect', 'connected'), 'https://example.github.io/gmail-agent/?gmail=connected');
+  for (const target of [undefined, null, '', 'App', 'x', 5, {}]) assert.equal(backUrlFor(target, web, 'gmailagent://connect', 'error'), 'https://example.github.io/gmail-agent/?gmail=error', String(target));
+});
+
+test('backUrlFor: target app goes to the configured deep link with the result', () => {
+  assert.equal(backUrlFor('app', 'https://w/', 'gmailagent://connect', 'connected'), 'gmailagent://connect?gmail=connected');
+  assert.equal(backUrlFor('app', 'https://w/', 'gmailagent://connect?x=1', 'cancelled'), 'gmailagent://connect?x=1&gmail=cancelled');
+  assert.equal(backUrlFor('app', 'https://w/', 'gmailagent://connect', 'weird'), 'gmailagent://connect?gmail=error', 'the result is still one of the fixed list');
+});
+
+test('backUrlFor: an app link that is missing or not a custom scheme is never used (no open redirect)', () => {
+  const web = 'https://w/';
+  for (const link of [undefined, '', 'https://evil.example/', 'http://evil.example/', 'javascript:alert(1)', 'data:text/html,x', '//evil.example', 'gmail agent://x', 'gmailagent:/x', 'file:///etc/passwd']) {
+    assert.equal(backUrlFor('app', web, link as any, 'connected'), 'https://w/?gmail=connected', String(link));
+  }
 });

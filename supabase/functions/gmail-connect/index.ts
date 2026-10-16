@@ -4,6 +4,7 @@
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { memberHasPro } from './access.ts';
 import { scopeFor } from './scopes.ts';
+import { parseTarget } from './target.ts';
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -23,13 +24,17 @@ Deno.serve(async (req: Request) => {
   const { data, error } = await admin.auth.getUser(token);
   if (error || !data.user) return reply(401, { error: 'not signed in' });
 
+  // Where the member returns after Google: the web page (default) or the mobile app (the deep link is the server's own setting).
+  const picked = parseTarget(await req.json().catch(() => ({})), Boolean(Deno.env.get('APP_DEEP_LINK')));
+  if (!picked.ok) return reply(400, { error: picked.error });
+
   const clientId = Deno.env.get('GOOGLE_CLIENT_ID');
   if (!clientId) return reply(500, { error: 'GOOGLE_CLIENT_ID is not set' });
 
   // A random one-time value ties the Google answer back to this member (and expires after 10 minutes).
   const state = crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '');
   await admin.from('gmail_oauth_states').delete().lt('created_at', new Date(Date.now() - 10 * 60 * 1000).toISOString());
-  const { error: insertError } = await admin.from('gmail_oauth_states').insert({ state, user_id: data.user.id });
+  const { error: insertError } = await admin.from('gmail_oauth_states').insert({ state, user_id: data.user.id, ...(picked.target === 'app' ? { target: 'app' } : {}) });
   if (insertError) return reply(500, { error: 'could not start' });
 
   const params = new URLSearchParams({

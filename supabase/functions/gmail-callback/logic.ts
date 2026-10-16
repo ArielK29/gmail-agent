@@ -24,3 +24,11 @@ export function optionalScopes(tokens: any): { calendar: boolean; tasks: boolean
   const granted = String(tokens?.scope ?? '').split(/\s+/).filter(Boolean);
   return { calendar: granted.includes(GOOGLE_CALENDAR), tasks: granted.includes(GOOGLE_TASKS) };
 }
+// Issue 32: the app can come back to a deep link instead of the web page. The address comes from the server's own setting
+// (APP_DEEP_LINK), never from the request, and only a custom app scheme counts (never http, javascript, data, file...).
+const APP_LINK = /^[a-z][a-z0-9+.-]*:\/\/\S*$/i;
+const NOT_AN_APP = /^(https?|javascript|data|file|ftp|blob|about|vbscript):/i;
+export function backUrlFor(target: unknown, webUrl: string, appLink: string | undefined, result: string): string {
+  const useApp = target === 'app' && typeof appLink === 'string' && APP_LINK.test(appLink) && !NOT_AN_APP.test(appLink);
+  return backUrl(useApp ? (appLink as string) : webUrl, result);
+}
