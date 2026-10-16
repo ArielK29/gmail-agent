@@ -176,12 +176,12 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="config.js"></script>
-<script src="logic.js?v=20261013d"></script>
+<script src="logic.js?v=20261016a"></script>
 <script>
   // config.js defines window.APP_CONFIG = { supabaseUrl, supabaseKey } (the publishable key; never a secret key).
   const { supabaseUrl, supabaseKey } = window.APP_CONFIG;
   const logic = window.AgentLogic; // Hebrew messages and validation, tested in Node (docs/logic.test.js)
-  const LOGIC_FUNCTIONS = ['authMessage', 'validateCredentials', 'problemMessage', 'emptyStateText', 'dailySummary', 'summaryHeadline', 'urgentHeadline', 'safeText', 'morningBriefing', 'greeting', 'localDay', 'scanErrorMessage', 'parseItemsText', 'validateScanForm', 'scanProgressText', 'rollupItems', 'lastFullMonth', 'agendaBriefing', 'planView', 'isPayUrl', 'billingErrorMessage', 'deleteAccountMessage', 'deleteAccountConfirmText'];
+  const LOGIC_FUNCTIONS = ['authMessage', 'validateCredentials', 'problemMessage', 'emptyStateText', 'dailySummary', 'summaryHeadline', 'urgentHeadline', 'safeText', 'morningBriefing', 'greeting', 'localDay', 'scanErrorMessage', 'parseItemsText', 'validateScanForm', 'scanProgressText', 'rollupItems', 'lastFullMonth', 'agendaBriefing', 'planView', 'isPayUrl', 'billingErrorMessage', 'deleteAccountMessage', 'deleteAccountConfirmText', 'oauthReturnMessage'];
   if (!logic || LOGIC_FUNCTIONS.some((name) => typeof logic[name] !== 'function')) {
     // An old cached copy of logic.js: ask for a fresh page once instead of showing a broken one.
     let already = false; try { already = Boolean(sessionStorage.getItem('logicReload')); sessionStorage.setItem('logicReload', '1'); } catch { already = true; }
@@ -742,6 +742,13 @@
 
   // Result of the Google consent (the function redirects back with ?gmail=...). Shown in the notice area, which is
   // visible even when the member is signed out.
+  // A failed or cancelled "sign in with Google" returns here with ?error=... or #error=...: say so instead of silently
+  // showing the login screen again, and clean the address.
+  const oauthProblem = logic.oauthReturnMessage(location.search, location.hash);
+  if (oauthProblem) {
+    history.replaceState(null, '', location.pathname);
+    notify(oauthProblem);
+  }
   const result = new URLSearchParams(location.search).get('gmail');
   if (result) {
     history.replaceState(null, '', location.pathname);

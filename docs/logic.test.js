@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, agendaBriefing, deadlineLabel, greeting, localDay, planView, isProRow, billingErrorMessage, isPayUrl, priceText, deleteAccountMessage, deleteAccountConfirmText } = require('./logic.js');
+const { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, agendaBriefing, deadlineLabel, greeting, localDay, planView, isProRow, billingErrorMessage, isPayUrl, priceText, deleteAccountMessage, deleteAccountConfirmText, oauthReturnMessage } = require('./logic.js');
 
 test('authMessage maps the Supabase errors seen in the browser run', () => {
   assert.equal(authMessage({ message: 'Invalid login credentials' }), 'האימייל או הסיסמה שגויים.');
@@ -571,4 +571,33 @@ test('deleteAccountMessage: every server answer has a Hebrew text; a failed Pola
     const text = deleteAccountMessage(code);
     assert.ok(/[א-ת]/.test(text) && !/[A-Za-z]/.test(text), String(code) + ' -> ' + text);
   }
+});
+// Google sign-in (issue 7): when the sign-in comes back with an error the page must say so, not silently show the login again.
+test('oauthReturnMessage explains a failed Google sign-in (query form)', () => {
+  const text = oauthReturnMessage('?error=server_error&error_code=unexpected_failure&error_description=Unable+to+exchange+external+code', '');
+  assert.match(text, /Google/);
+  assert.match(text, /אימייל וסיסמה/);
+  assert.doesNotMatch(text.replace(/Google/g, ''), /[A-Za-z]/);
+});
+
+test('oauthReturnMessage reads the hash form too, and tells a cancel from a failure', () => {
+  const failed = oauthReturnMessage('', '#error=server_error&error_description=bad');
+  const cancelled = oauthReturnMessage('?error=access_denied&error_description=User+cancelled', '');
+  assert.notEqual(failed, '');
+  assert.notEqual(cancelled, '');
+  assert.notEqual(failed, cancelled);
+  assert.match(cancelled, /בוטל/);
+});
+
+test('oauthReturnMessage stays silent when there is no sign-in error', () => {
+  assert.equal(oauthReturnMessage('', ''), '');
+  assert.equal(oauthReturnMessage('?gmail=connected', ''), '');
+  assert.equal(oauthReturnMessage('?billing=success', '#access_token=abc'), '');
+  assert.equal(oauthReturnMessage(undefined, undefined), '');
+  assert.equal(oauthReturnMessage(null, null), '');
+});
+
+test('oauthReturnMessage never shows the raw server text', () => {
+  const text = oauthReturnMessage('?error=server_error&error_description=SECRET+internal+detail', '');
+  assert.doesNotMatch(text, /SECRET|internal|detail/);
 });

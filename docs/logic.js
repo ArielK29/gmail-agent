@@ -24,6 +24,17 @@
     return GENERIC;
   }
 
+  // A failed "sign in with Google" comes back to the page with ?error=... (or #error=...). The member gets one Hebrew
+  // sentence: cancelled, or failed with the way out. The server's own text is never shown.
+  function oauthReturnMessage(search, hash) {
+    const read = (text) => { try { return new URLSearchParams(String(text || '').replace(/^[?#]/, '')); } catch { return new URLSearchParams(''); } };
+    const params = [read(search), read(hash)];
+    const error = (params.map((p) => p.get('error')).find(Boolean) || '').toLowerCase();
+    if (!error) return '';
+    if (error === 'access_denied') return 'ההתחברות עם Google בוטלה.';
+    return 'ההתחברות עם Google נכשלה. אפשר להתחבר עם אימייל וסיסמה.';
+  }
+
   function validateCredentials(email, password) {
     const e = String(email || '').trim();
     if (!e) return 'יש להכניס אימייל.';
@@ -351,6 +362,6 @@
   const isPayUrl = (value) => {
     if (typeof value !== 'string' || value.length > 2083 || !/^https:\/\/[^\s]+$/.test(value)) return false;
     try { const host = new URL(value).hostname.toLowerCase(); return host === 'polar.sh' || host.endsWith('.polar.sh'); } catch { return false; }
-  };  return { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, agendaBriefing, deadlineLabel, greeting, localDay, planView, isProRow, billingErrorMessage, isPayUrl, priceText, deleteAccountMessage, deleteAccountConfirmText };
+  };  return { authMessage, validateCredentials, problemMessage, emptyStateText, dailySummary, summaryHeadline, urgentHeadline, safeText, scanErrorMessage, parseItemsText, validateScanForm, scanProgressText, rollupItems, lastFullMonth, morningBriefing, agendaBriefing, deadlineLabel, greeting, localDay, planView, isProRow, billingErrorMessage, isPayUrl, priceText, deleteAccountMessage, deleteAccountConfirmText, oauthReturnMessage };
 });
 
